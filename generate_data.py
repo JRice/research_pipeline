@@ -16,7 +16,7 @@ import argparse
 import csv
 import random
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import numpy as np
 
@@ -181,7 +181,7 @@ class DataGenerator:
         """
 
         if start_time is None:
-            start_time = datetime.utcnow() - timedelta(hours=24)
+            start_time = datetime.now(timezone.utc) - timedelta(hours=24)
 
         dataset = []
         sensors = SENSOR_CONFIGS.copy()
