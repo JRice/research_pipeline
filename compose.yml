@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: sensor_pipeline
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+
+  api:
+    build:
+      context: ./api
+    environment:
+      DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/sensor_pipeline
+    depends_on:
+      - postgres
+
+  worker:
+    build:
+      context: ./worker
+    environment:
+      DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/sensor_pipeline
+      INPUT_CSV: /data/sample_data.csv
+    volumes:
+      - ./data:/data
+    depends_on:
+      - postgres
+
+  nginx:
+    build:
+      context: ./nginx
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
