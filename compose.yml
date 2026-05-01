@@ -1,31 +1,57 @@
 services:
+
   postgres:
     image: postgres:16
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
-      POSTGRES_DB: sensor_pipeline
-      POSTGRES_USER: pipeline
+      POSTGRES_DB:       sensor_pipeline
+      POSTGRES_USER:     pipeline
       POSTGRES_PASSWORD: pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d sensor_pipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   api:
     build:
       context: ./api
     environment:
       DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/sensor_pipeline
+      COMPOSE_FILE: /app/compose.yml
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # Docker socket + compose file enable the POST /ingest convenience endpoint.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./compose.yml:/app/compose.yml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   worker:
     build:
       context: ./worker
     environment:
       DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/sensor_pipeline
-      INPUT_CSV: /data/sample_data.csv
+      INPUT_CSV:    /data/sample_data.csv
     volumes:
       - ./data:/data
+      # Mount anomaly_detection.py from the repo root so edits are reflected
+      # without rebuilding the worker image.
+      - ./anomaly_detection.py:/app/anomaly_detection.py:ro
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   nginx:
     build:
@@ -33,7 +59,8 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
