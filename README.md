@@ -104,9 +104,9 @@ directly at `http://localhost:8000/` if you expose the API port.
 
 | Param       | Type     | Default | Description               |
 |-------------|----------|---------|---------------------------|
-| `sensor_id` | string   | --       | Filter by sensor ID      |
-| `start`     | ISO 8601 | --       | Timestamp lower bound    |
-| `end`       | ISO 8601 | --       | Timestamp upper bound    |
+| `sensor_id` | string   | --      | Filter by sensor ID       |
+| `start`     | ISO 8601 | --      | Timestamp lower bound     |
+| `end`       | ISO 8601 | --      | Timestamp upper bound     |
 | `page`      | int >= 1 | 1       | Page number               |
 | `page_size` | 1–200    | 50      | Results per page          |
 
@@ -149,10 +149,10 @@ terraform -chdir=terraform apply -var="db_password=CHANGEME"
 
 Required GitHub secrets/variables:
 
-| Name           | Kind     | Value                          |
-|----------------|----------|--------------------------------|
-| `AWS_ROLE_ARN` | Secret   | IAM role ARN for OIDC          |
-| `AWS_REGION`   | Variable | e.g. `us-east-1`               |
+| Name           | Kind     | Value                   |
+|----------------|----------|-------------------------|
+| `AWS_ROLE_ARN` | Secret   | IAM role ARN for OIDC   |
+| `AWS_REGION`   | Variable | e.g. `us-east-1`        |
 
 ---
 
