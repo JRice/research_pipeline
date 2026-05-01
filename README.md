@@ -108,7 +108,7 @@ directly at `http://localhost:8000/` if you expose the API port.
 | `start`     | ISO 8601 | --      | Timestamp lower bound     |
 | `end`       | ISO 8601 | --      | Timestamp upper bound     |
 | `page`      | int >= 1 | 1       | Page number               |
-| `page_size` | 1–200    | 50      | Results per page          |
+| `page_size` | 1-200    | 50      | Results per page          |
 
 ---
 
