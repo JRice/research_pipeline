@@ -52,7 +52,7 @@ def wait_for_db(url: str, max_wait: int = 30) -> psycopg2.extensions.connection:
 
 def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", utc=True)
     return df
 
 

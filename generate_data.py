@@ -105,7 +105,7 @@ class DataGenerator:
         daily_temp_cycle = 2.0 * math.sin(2 * math.pi * (hour_of_day - 6) / 24)
 
         return {
-            'timestamp': timestamp.isoformat() + 'Z',
+            'timestamp': timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z',
             'sensor_id': sensor['sensor_id'],
             'temperature': round(sensor['temp_baseline'] + daily_temp_cycle +
                                temp_correlation * 0.3 + temp_noise, 1),
