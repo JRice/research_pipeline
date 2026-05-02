@@ -1,6 +1,6 @@
-output "alb_dns_name" {
-  description = "Public DNS name of the Application Load Balancer."
-  value       = aws_lb.main.dns_name
+output "nginx_ecr_repository_url" {
+  description = "ECR repository URL for the nginx gateway image."
+  value       = aws_ecr_repository.nginx.repository_url
 }
 
 output "api_ecr_repository_url" {
@@ -24,7 +24,12 @@ output "ecs_cluster_name" {
   value       = aws_ecs_cluster.main.name
 }
 
-output "ecs_api_service_name" {
-  description = "ECS service name for the API."
-  value       = aws_ecs_service.api.name
+output "ecs_app_service_name" {
+  description = "ECS service name for the combined nginx+api app."
+  value       = aws_ecs_service.app.name
+}
+
+output "app_public_ip_note" {
+  description = "How to find the app's public IP after deployment."
+  value       = "Run: aws ecs list-tasks --cluster ${aws_ecs_cluster.main.name} --service-name ${aws_ecs_service.app.name} | xargs aws ecs describe-tasks --cluster ${aws_ecs_cluster.main.name} --tasks | jq -r '.tasks[].attachments[].details[] | select(.name==\"networkInterfaceId\") | .value' | xargs aws ec2 describe-network-interfaces --network-interface-ids | jq -r '.NetworkInterfaces[].Association.PublicIp'"
 }

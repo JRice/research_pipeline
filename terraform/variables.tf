@@ -46,20 +46,20 @@ variable "db_password" {
   sensitive   = true
 }
 
-variable "api_image_tag" {
-  description = "Docker image tag to deploy for the API service."
+variable "image_tag" {
+  description = "Docker image tag to deploy for all services (api, nginx, worker)."
   type        = string
   default     = "latest"
 }
 
-variable "api_cpu" {
-  description = "Fargate CPU units for the API task (256 = 0.25 vCPU)."
+variable "app_cpu" {
+  description = "Fargate CPU units for the combined nginx+api task (256 = 0.25 vCPU)."
   type        = number
-  default     = 256
+  default     = 512 # shared across nginx and api containers
 }
 
-variable "api_memory" {
-  description = "Fargate memory (MiB) for the API task."
+variable "app_memory" {
+  description = "Fargate memory (MiB) for the combined nginx+api task."
   type        = number
-  default     = 512
+  default     = 1024
 }

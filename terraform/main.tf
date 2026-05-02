@@ -87,9 +87,10 @@ resource "aws_route_table_association" "public" {
 
 # ── Security groups ───────────────────────────────────────────────────────────
 
-resource "aws_security_group" "alb" {
-  name        = "${var.project_name}-alb"
-  description = "Allow inbound HTTP from the internet"
+# nginx is the only public-facing container; only port 80 is exposed.
+resource "aws_security_group" "app" {
+  name        = "${var.project_name}-app"
+  description = "Allow inbound HTTP on port 80 (nginx gateway)"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -107,36 +108,16 @@ resource "aws_security_group" "alb" {
   }
 }
 
-resource "aws_security_group" "api" {
-  name        = "${var.project_name}-api"
-  description = "Allow traffic from ALB to API tasks"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-rds"
-  description = "Allow PostgreSQL from ECS tasks"
+  description = "Allow PostgreSQL from the app task"
   vpc_id      = aws_vpc.main.id
 
   ingress {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.api.id]
+    security_groups = [aws_security_group.app.id]
   }
 
   egress {
@@ -155,20 +136,20 @@ resource "aws_db_subnet_group" "main" {
 }
 
 resource "aws_db_instance" "postgres" {
-  identifier              = "${var.project_name}-postgres"
-  engine                  = "postgres"
-  engine_version          = "16"
-  instance_class          = var.db_instance_class
-  allocated_storage       = 20
-  db_name                 = var.db_name
-  username                = var.db_username
-  password                = var.db_password
-  db_subnet_group_name    = aws_db_subnet_group.main.name
-  vpc_security_group_ids  = [aws_security_group.rds.id]
-  skip_final_snapshot     = true
-  publicly_accessible     = false
-  multi_az                = false  # single-AZ for cost; see README for upgrade path
-  deletion_protection     = false
+  identifier             = "${var.project_name}-postgres"
+  engine                 = "postgres"
+  engine_version         = "16"
+  instance_class         = var.db_instance_class
+  allocated_storage      = 20
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  skip_final_snapshot    = true
+  publicly_accessible    = false
+  multi_az               = false # single-AZ; see README for upgrade path
+  deletion_protection    = false
 
   tags = { Name = "${var.project_name}-postgres" }
 }
@@ -178,19 +159,19 @@ resource "aws_db_instance" "postgres" {
 resource "aws_ecr_repository" "api" {
   name                 = "${var.project_name}-api"
   image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
+  image_scanning_configuration { scan_on_push = true }
 }
 
 resource "aws_ecr_repository" "worker" {
   name                 = "${var.project_name}-worker"
   image_tag_mutability = "MUTABLE"
+  image_scanning_configuration { scan_on_push = true }
+}
 
-  image_scanning_configuration {
-    scan_on_push = true
-  }
+resource "aws_ecr_repository" "nginx" {
+  name                 = "${var.project_name}-nginx"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration { scan_on_push = true }
 }
 
 # ── IAM — ECS task execution ──────────────────────────────────────────────────
@@ -216,22 +197,6 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow ECS to pull images from ECR (already covered by the managed policy above,
-# but we add ECR read explicitly for clarity).
-resource "aws_iam_role_policy" "ecr_pull" {
-  name = "ecr-pull"
-  role = aws_iam_role.ecs_task_execution.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
-      Resource = "*"
-    }]
-  })
-}
-
 # ── ECS Fargate cluster ───────────────────────────────────────────────────────
 
 resource "aws_ecs_cluster" "main" {
@@ -243,85 +208,12 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
-# ── ECS task definition — API ─────────────────────────────────────────────────
-
-locals {
-  db_url = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.postgres.address}:5432/${var.db_name}"
-}
-
-resource "aws_ecs_task_definition" "api" {
-  family                   = "${var.project_name}-api"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.api_cpu
-  memory                   = var.api_memory
-  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
-
-  container_definitions = jsonencode([{
-    name      = "api"
-    image     = "${aws_ecr_repository.api.repository_url}:${var.api_image_tag}"
-    essential = true
-
-    portMappings = [{
-      containerPort = 8000
-      protocol      = "tcp"
-    }]
-
-    environment = [
-      { name = "DATABASE_URL", value = local.db_url }
-    ]
-
-    healthCheck = {
-      command     = ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
-      interval    = 30
-      timeout     = 5
-      retries     = 3
-      startPeriod = 15
-    }
-
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = "/ecs/${var.project_name}-api"
-        "awslogs-region"        = var.aws_region
-        "awslogs-stream-prefix" = "ecs"
-      }
-    }
-  }])
-}
-
-# ── ECS task definition — Worker (run via ECS RunTask, not a service) ─────────
-
-resource "aws_ecs_task_definition" "worker" {
-  family                   = "${var.project_name}-worker"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = 256
-  memory                   = 512
-  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
-
-  container_definitions = jsonencode([{
-    name      = "worker"
-    image     = "${aws_ecr_repository.worker.repository_url}:${var.api_image_tag}"
-    essential = true
-
-    environment = [
-      { name = "DATABASE_URL", value = local.db_url },
-      { name = "INPUT_CSV",    value = "/data/sample_data.csv" }
-    ]
-
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = "/ecs/${var.project_name}-worker"
-        "awslogs-region"        = var.aws_region
-        "awslogs-stream-prefix" = "ecs"
-      }
-    }
-  }])
-}
-
 # ── CloudWatch log groups ─────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_log_group" "nginx" {
+  name              = "/ecs/${var.project_name}-nginx"
+  retention_in_days = 7
+}
 
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/ecs/${var.project_name}-api"
@@ -333,67 +225,145 @@ resource "aws_cloudwatch_log_group" "worker" {
   retention_in_days = 7
 }
 
-# ── ALB ───────────────────────────────────────────────────────────────────────
+# ── ECS task definition — app (nginx + api as sidecars) ──────────────────────
+#
+# nginx and api share a network namespace inside the task, so nginx proxies to
+# localhost:8000 — exactly mirroring the local docker compose setup, but with
+# "api" replaced by "localhost".  nginx is the only container with a public
+# port mapping; the api port is intentionally not exposed externally.
 
-resource "aws_lb" "main" {
-  name               = "${var.project_name}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+locals {
+  db_url = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.postgres.address}:5432/${var.db_name}"
 }
 
-resource "aws_lb_target_group" "api" {
-  name        = "${var.project_name}-api-tg"
-  port        = 8000
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
+resource "aws_ecs_task_definition" "app" {
+  family                   = "${var.project_name}-app"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.app_cpu
+  memory                   = var.app_memory
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
 
-  health_check {
-    path                = "/health"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
+  container_definitions = jsonencode([
+    # ── nginx (gateway) ───────────────────────────────────────────────────
+    {
+      name      = "nginx"
+      image     = "${aws_ecr_repository.nginx.repository_url}:${var.image_tag}"
+      essential = true
+
+      portMappings = [{
+        containerPort = 80
+        protocol      = "tcp"
+      }]
+
+      environment = [
+        # Shared network namespace → api is reachable on localhost
+        { name = "API_HOST", value = "localhost" }
+      ]
+
+      dependsOn = [{
+        containerName = "api"
+        condition     = "HEALTHY"
+      }]
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+        interval    = 15
+        timeout     = 5
+        retries     = 3
+        startPeriod = 20
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.nginx.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    },
+
+    # ── api ───────────────────────────────────────────────────────────────
+    {
+      name      = "api"
+      image     = "${aws_ecr_repository.api.repository_url}:${var.image_tag}"
+      essential = true
+
+      # Port 8000 is NOT in portMappings — it is internal to the task only.
+      # nginx reaches it via localhost:8000.
+
+      environment = [
+        { name = "DATABASE_URL", value = local.db_url }
+      ]
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+        interval    = 15
+        timeout     = 5
+        retries     = 3
+        startPeriod = 20
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.api.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
 }
 
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = 80
-  protocol          = "HTTP"
+# ── ECS task definition — worker (one-shot, run via ECS RunTask) ──────────────
 
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
-  }
+resource "aws_ecs_task_definition" "worker" {
+  family                   = "${var.project_name}-worker"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name      = "worker"
+    image     = "${aws_ecr_repository.worker.repository_url}:${var.image_tag}"
+    essential = true
+
+    environment = [
+      { name = "DATABASE_URL", value = local.db_url },
+      { name = "INPUT_CSV",    value = "/data/sample_data.csv" }
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.worker.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
+  }])
 }
 
-# ── ECS Service — API ─────────────────────────────────────────────────────────
+# ── ECS Service — app (nginx + api) ──────────────────────────────────────────
 
-resource "aws_ecs_service" "api" {
-  name            = "${var.project_name}-api"
+resource "aws_ecs_service" "app" {
+  name            = "${var.project_name}-app"
   cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.api.arn
+  task_definition = aws_ecs_task_definition.app.arn
   desired_count   = 1
   launch_type     = "FARGATE"
 
   network_configuration {
     subnets          = aws_subnet.public[*].id
-    security_groups  = [aws_security_group.api.id]
-    assign_public_ip = true
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = true # public IP is the entry point; no ALB in front
   }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.api.arn
-    container_name   = "api"
-    container_port   = 8000
-  }
-
-  depends_on = [aws_lb_listener.http]
 
   lifecycle {
-    ignore_changes = [task_definition]  # CI/CD manages image updates
+    ignore_changes = [task_definition] # CI/CD manages image updates
   }
 }

@@ -56,6 +56,8 @@ services:
   nginx:
     build:
       context: ./nginx
+    environment:
+      API_HOST: api   # docker compose service name; ECS uses "localhost"
     ports:
       - "8080:80"
     depends_on:
