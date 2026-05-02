@@ -114,6 +114,15 @@ terraform -chdir=tarraform plan
 ...I don't think at this scope it makes sense for Terraform to run as part of the CI: apply manually once, use ECS
 for re-deployment. The tarraform plan might be worth it as a check if we have time.
 
+## Other Possibilities
+
+For a production version, ECS Express Mode could reduce deployment boilerplate for the stateless API/frontend layer,
+but we were asked to use Terraform.
+
+RDS PostgreSQL or Aurora Serverless v2 would also make appropriate managed database options, if this were headed for
+an AWS-specific deployment. I understand AWS _had_ TimeStream, which would have made an interesting alternative
+choice for sensor data, but apparently that service is being sunsetted.
+
 ## Priorities
 
 1. working Docker Compose
