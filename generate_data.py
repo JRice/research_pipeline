@@ -16,7 +16,7 @@ import argparse
 import csv
 import random
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import numpy as np
 
@@ -105,7 +105,7 @@ class DataGenerator:
         daily_temp_cycle = 2.0 * math.sin(2 * math.pi * (hour_of_day - 6) / 24)
 
         return {
-            'timestamp': timestamp.isoformat() + 'Z',
+            'timestamp': timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z',
             'sensor_id': sensor['sensor_id'],
             'temperature': round(sensor['temp_baseline'] + daily_temp_cycle +
                                temp_correlation * 0.3 + temp_noise, 1),
@@ -181,7 +181,7 @@ class DataGenerator:
         """
 
         if start_time is None:
-            start_time = datetime.utcnow() - timedelta(hours=24)
+            start_time = datetime.now(timezone.utc) - timedelta(hours=24)
 
         dataset = []
         sensors = SENSOR_CONFIGS.copy()
