@@ -9,9 +9,15 @@ REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$REGISTRY"
 
-for svc in nginx api worker; do
+for svc in nginx api worker migrate; do
   image="${REGISTRY}/${PROJECT_NAME}-${svc}:latest"
-  docker build -t "$image" "./${svc}"
+
+  if [[ "$svc" == "migrate" ]]; then
+    docker build -f "./migrate/Dockerfile" -t "$image" "."
+  else
+    docker build -t "$image" "./${svc}"
+  fi
+
   docker push "$image"
 done
 

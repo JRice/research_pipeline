@@ -170,6 +170,12 @@ resource "aws_ecr_repository" "worker" {
   image_scanning_configuration { scan_on_push = true }
 }
 
+resource "aws_ecr_repository" "migrate" {
+  name                 = "${var.project_name}-migrate"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration { scan_on_push = true }
+}
+
 resource "aws_ecr_repository" "nginx" {
   name                 = "${var.project_name}-nginx"
   image_tag_mutability = "MUTABLE"
@@ -295,6 +301,11 @@ resource "aws_cloudwatch_log_group" "worker" {
   retention_in_days = 7
 }
 
+resource "aws_cloudwatch_log_group" "migrate" {
+  name              = "/ecs/${var.project_name}-migrate"
+  retention_in_days = 7
+}
+
 # ── ECS task definition — app (nginx + api as sidecars) ──────────────────────
 #
 # nginx and api share a network namespace inside the task, so nginx proxies to
@@ -415,6 +426,37 @@ resource "aws_ecs_task_definition" "worker" {
       logDriver = "awslogs"
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.worker.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_task_definition" "migrate" {
+  family                   = "${var.project_name}-migrate"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name      = "migrate"
+    image     = "${aws_ecr_repository.migrate.repository_url}:${var.image_tag}"
+    essential = true
+
+    secrets = [
+      {
+        name      = "DATABASE_URL"
+        valueFrom = aws_secretsmanager_secret.db_url.arn
+      }
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.migrate.name
         "awslogs-region"        = var.aws_region
         "awslogs-stream-prefix" = "ecs"
       }

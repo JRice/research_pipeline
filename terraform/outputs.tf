@@ -13,6 +13,10 @@ output "worker_ecr_repository_url" {
   value       = aws_ecr_repository.worker.repository_url
 }
 
+output "migrate_ecr_repository_url" {
+  value = aws_ecr_repository.migrate.repository_url
+}
+
 output "data_bucket_name" {
   description = "S3 bucket used for worker CSV input."
   value       = aws_s3_bucket.data.bucket
@@ -36,6 +40,10 @@ output "ecs_app_service_name" {
 
 output "worker_task_family" {
   value = aws_ecs_task_definition.worker.family
+}
+
+output "migrate_task_family" {
+  value = aws_ecs_task_definition.migrate.family
 }
 
 output "public_subnet_ids" {
