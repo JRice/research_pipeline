@@ -5,3 +5,6 @@ __pycache__/
 *~
 .env
 data/*.csv
+terraform/*.tfvars
+terraform/*.tfstate
+terraform/*.tfstate.*
