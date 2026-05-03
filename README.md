@@ -179,3 +179,8 @@ Required GitHub secrets/variables:
   scheduler instead.
 - **No message queue** -- the pipeline is batch/on-demand. Adding SQS/Kafka would
   be the natural next step for streaming ingest.
+- The RDS instance is in a private subnet, but the app task is in a public subnet
+  with a public IP and no NAT. ...Okay for the app reaching RDS because both are
+  inside the VPC and the RDS security group allows traffic from the app security
+  group. However, if we later move the ECS task to private subnets, it will need
+  NAT or VPC endpoints for ECR/CloudWatch.
