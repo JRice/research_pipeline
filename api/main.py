@@ -84,9 +84,12 @@ def health(conn: psycopg2.extensions.connection = Depends(get_conn)) -> Dict[str
     try:
         with conn.cursor() as cur:
             cur.execute(HEALTH_CHECK)
+            tables_ready: int = cur.fetchone()["tables_ready"]
+        if tables_ready != 2:
+            raise RuntimeError("schema not initialised: expected tables sensor_readings and anomalies")
         return {"status": "ok", "db": "ok"}
     except Exception as exc:
-        logger.error("Health check DB query failed: %s", exc)
+        logger.error("Health check failed: %s", exc)
         raise HTTPException(
             status_code=503,
             detail={"status": "error", "db": str(exc)},

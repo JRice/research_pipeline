@@ -8,8 +8,6 @@ from pathlib import Path
 
 # Allow importing worker modules directly when running pytest from repo root.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-# anomaly_detection.py lives at repo root.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pandas as pd
 import pytest
@@ -41,30 +39,35 @@ def _make_df(sensor_counts: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_short_sensor_is_excluded():
-    df = _make_df({"LONG": 25, "SHORT": 5})
-    result = filter_eligible_sensors(df, window_size=20)
-    assert "LONG" in result["sensor_id"].values
-    assert "SHORT" not in result["sensor_id"].values
+def test_sensor_with_history_is_eligible():
+    batch_df = _make_df({"SENSOR_A": 3, "SENSOR_B": 5})
+    history_df = _make_df({"SENSOR_A": 10})
+    result, skipped = filter_eligible_sensors(batch_df, history_df)
+    assert set(result["sensor_id"].unique()) == {"SENSOR_A"}
+    assert skipped == {"SENSOR_B"}
 
 
-def test_sensor_exactly_at_threshold_is_included():
-    df = _make_df({"AT_THRESHOLD": 20})
-    result = filter_eligible_sensors(df, window_size=20)
-    assert len(result) == 20
-
-
-def test_all_sensors_short_returns_empty():
-    df = _make_df({"A": 3, "B": 7})
-    result = filter_eligible_sensors(df, window_size=20)
+def test_no_history_skips_all_sensors():
+    batch_df = _make_df({"SENSOR_A": 5})
+    result, skipped = filter_eligible_sensors(batch_df, pd.DataFrame())
     assert result.empty
+    assert skipped == {"SENSOR_A"}
+
+
+def test_all_sensors_with_history_none_skipped():
+    batch_df = _make_df({"A": 3, "B": 5})
+    history_df = _make_df({"A": 10, "B": 8})
+    result, skipped = filter_eligible_sensors(batch_df, history_df)
+    assert set(result["sensor_id"].unique()) == {"A", "B"}
+    assert skipped == set()
 
 
 def test_original_df_is_not_mutated():
-    df = _make_df({"GOOD": 30, "BAD": 2})
-    original_len = len(df)
-    filter_eligible_sensors(df, window_size=20)
-    assert len(df) == original_len
+    batch_df = _make_df({"GOOD": 5, "BAD": 2})
+    history_df = _make_df({"GOOD": 10})
+    original_len = len(batch_df)
+    filter_eligible_sensors(batch_df, history_df)
+    assert len(batch_df) == original_len
 
 
 def _base_df() -> pd.DataFrame:

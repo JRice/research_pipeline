@@ -60,13 +60,14 @@ class AnomalyDetector:
                 if metric not in sensor_df.columns:
                     continue
 
-                # Calculate rolling mean and std
-                rolling_mean = sensor_df[metric].rolling(
+                # Calculate rolling mean and std over prior readings only
+                # (shift(1) excludes the current point so a spike can't dampen its own z-score)
+                rolling_mean = sensor_df[metric].shift(1).rolling(
                     window=self.window_size,
                     min_periods=1
                 ).mean()
 
-                rolling_std = sensor_df[metric].rolling(
+                rolling_std = sensor_df[metric].shift(1).rolling(
                     window=self.window_size,
                     min_periods=1
                 ).std()
