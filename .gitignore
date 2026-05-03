@@ -8,4 +8,5 @@ data/*.csv
 terraform/*.tfvars
 terraform/*.tfstate
 terraform/*.tfstate.*
+terraform/tfplan
 .terraform/
