@@ -12,7 +12,7 @@ terraform {
   # backend "s3" {
   #   bucket = "YOUR-TERRAFORM-STATE-BUCKET"
   #   key    = "research-pipeline/terraform.tfstate"
-  #   region = "us-east-1"
+  #   region = "us-east-2"
   # }
 }
 
