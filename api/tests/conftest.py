@@ -24,7 +24,7 @@ _SCHEMA = os.path.join(os.path.dirname(__file__), "..", "..", "db", "init.sql")
 def _db_url():
     url = os.environ.get("DATABASE_URL")
     if not url:
-        pytest.skip("DATABASE_URL not set — integration tests skipped")
+        pytest.skip("DATABASE_URL not set - integration tests skipped")
     return url
 
 

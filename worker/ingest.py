@@ -122,15 +122,6 @@ def fetch_prior_history(
     return history
 
 
-def filter_eligible_sensors(
-    batch_df: pd.DataFrame, history_df: pd.DataFrame
-) -> Tuple[pd.DataFrame, set]:
-    """Return batch rows for sensors that have prior DB history, plus the set of skipped IDs."""
-    sensors_with_history = set(history_df["sensor_id"].unique()) if not history_df.empty else set()
-    eligible_ids = set(batch_df["sensor_id"].unique()) & sensors_with_history
-    skipped = set(batch_df["sensor_id"].unique()) - eligible_ids
-    return batch_df[batch_df["sensor_id"].isin(eligible_ids)].copy(), skipped
-
 
 def _anomaly_tuples(anomalies: List[dict], df: pd.DataFrame) -> List[Tuple]:
     """Enrich raw anomaly dicts with denormalized sensor_id/timestamp from the batch."""
@@ -203,21 +194,19 @@ def main() -> None:
 
     history_df = fetch_prior_history(conn, sensor_ids, new_ids, detector.window_size)
 
-    eligible_batch, skipped = filter_eligible_sensors(df, history_df)
-    if skipped:
-        logger.warning(
-            "Skipping anomaly detection for sensors with no prior history: %s", skipped
-        )
+    # Prepend stored history so the rolling window spans prior ingests.
+    # When history is empty (first ingest), detection still runs against the
+    # batch itself; min_periods=4 in AnomalyDetector handles warm-up naturally.
+    combined = (
+        pd.concat([history_df, df]).sort_values(["sensor_id", "timestamp"])
+        if not history_df.empty
+        else df
+    )
+    all_anomalies = detector.detect_anomalies(combined.to_dict("records"))
+    # Discard any re-flagged history rows; only report anomalies in this batch.
+    raw_anomalies = [a for a in all_anomalies if a["sensor_data_id"] in new_ids]
 
-    raw_anomalies: List[dict] = []
-    if not eligible_batch.empty:
-        # Prepend stored history so the rolling window spans prior ingests too
-        combined = pd.concat([history_df, eligible_batch]).sort_values(["sensor_id", "timestamp"])
-        all_anomalies = detector.detect_anomalies(combined.to_dict("records"))
-        # Discard any re-flagged history rows; only report anomalies in this batch
-        raw_anomalies = [a for a in all_anomalies if a["sensor_data_id"] in new_ids]
-
-    anom_rows = _anomaly_tuples(raw_anomalies, eligible_batch)
+    anom_rows = _anomaly_tuples(raw_anomalies, df)
     anomalies_inserted = insert_anomalies(conn, anom_rows)
     conn.close()
 

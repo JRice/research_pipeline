@@ -17,7 +17,7 @@ import pytest
 from anomaly_detection import AnomalyDetector
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers -------------------------------------------------------------------
 
 def _records(sensor_id: str, temperatures: list, start_id: int = 1) -> list:
     base = pd.Timestamp("2024-01-01", tz="UTC")
@@ -39,7 +39,7 @@ def _temp_anomaly_ids(anomalies: list) -> set:
     return {a["sensor_data_id"] for a in anomalies if a["anomaly_type"] == "temperature_anomaly"}
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# -- Tests ---------------------------------------------------------------------
 
 def test_clear_spike_is_detected():
     # 20 stable baseline readings followed by one large spike.
@@ -64,8 +64,8 @@ def test_baseline_readings_not_flagged():
 
 
 def test_normal_variation_produces_no_anomalies():
-    # Values oscillate well within two standard deviations — nothing should fire.
-    values = [22.0 + 0.2 * (i % 5 - 2) for i in range(40)]  # range 21.6 – 22.4
+    # Values oscillate well within two standard deviations - nothing should fire.
+    values = [22.0 + 0.2 * (i % 5 - 2) for i in range(40)]  # range 21.6 - 22.4
     detector = AnomalyDetector(window_size=20, threshold=2.0)
     anomalies = detector.detect_anomalies(_records("S1", values))
     assert anomalies == [], f"Unexpected anomalies: {anomalies}"
@@ -78,7 +78,7 @@ def test_priors_only_window_z_score():
     only.  If the current reading were included in its own window both the mean
     and the std would shift, producing a different (lower) z-score.
     """
-    baseline = [20.0 if i % 2 == 0 else 24.0 for i in range(20)]  # mean=22, std≈2.05
+    baseline = [20.0 if i % 2 == 0 else 24.0 for i in range(20)]  # mean=22, std~=2.05
     spike = 28.0
 
     detector = AnomalyDetector(window_size=20, threshold=2.0)
@@ -120,5 +120,5 @@ def test_no_anomalies_without_sufficient_prior_context():
     detector = AnomalyDetector(window_size=20, threshold=2.0)
     anomalies = detector.detect_anomalies(_records("S1", values))
     # With shift(1), row 0 has no prior at all (shifted value is NaN).
-    # Rows 1 and 2 have 1-2 priors; std of 1-2 values is NaN or 0 → z is NaN → skipped.
+    # Rows 1 and 2 have 1-2 priors; std of 1-2 values is NaN or 0 -> z is NaN -> skipped.
     assert anomalies == [], f"Expected no anomalies from cold-start data, got: {anomalies}"

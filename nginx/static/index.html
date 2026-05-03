@@ -177,16 +177,16 @@
         </tr>
       </thead>
       <tbody id="results-body">
-        <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+        <tr class="empty-row"><td colspan="6">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="pagination">
-    <span id="page-info">—</span>
+    <span id="page-info">&mdash;</span>
     <div class="pagination-controls">
-      <button class="btn-secondary" id="prev-btn" onclick="changePage(-1)" disabled>← Prev</button>
-      <button class="btn-secondary" id="next-btn" onclick="changePage(1)"  disabled>Next →</button>
+      <button class="btn-secondary" id="prev-btn" onclick="changePage(-1)" disabled>&larr; Prev</button>
+      <button class="btn-secondary" id="next-btn" onclick="changePage(1)"  disabled>Next &rarr;</button>
     </div>
   </div>
 </div>
@@ -196,7 +196,7 @@
   let currentPage = 1;
   let totalResults = 0;
 
-  // ── Sensor dropdown ─────────────────────────────────────────────────────────
+  // --- Sensor dropdown ---
   async function loadSensors() {
     try {
       const res = await fetch('/api/sensors');
@@ -214,7 +214,7 @@
     }
   }
 
-  // ── Anomaly table ───────────────────────────────────────────────────────────
+  // --- Anomaly table ---
   function buildQuery() {
     const params = new URLSearchParams();
     const sensor = document.getElementById('sensor-select').value;
@@ -229,13 +229,29 @@
   }
 
   function fmt(isoStr) {
-    if (!isoStr) return '—';
+    if (!isoStr) return '\u2014';
     return new Date(isoStr).toLocaleString();
+  }
+
+  function makeTd(text) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    return td;
+  }
+
+  function makeEmptyRow(text) {
+    const tr = document.createElement('tr');
+    tr.className = 'empty-row';
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.textContent = text;
+    tr.appendChild(td);
+    return tr;
   }
 
   async function fetchAnomalies() {
     const tbody = document.getElementById('results-body');
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Loading…</td></tr>';
+    tbody.replaceChildren(makeEmptyRow('Loading\u2026'));
 
     try {
       const res = await fetch('/api/anomalies?' + buildQuery());
@@ -245,33 +261,39 @@
       renderTable(data.results);
       updatePagination(data.total, data.page, data.page_size);
     } catch (e) {
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${e.message}</td></tr>`;
+      tbody.replaceChildren(makeEmptyRow('Error: ' + e.message));
     }
   }
 
   function renderTable(rows) {
     const tbody = document.getElementById('results-body');
+    tbody.replaceChildren();
     if (!rows.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No anomalies found.</td></tr>';
+      tbody.appendChild(makeEmptyRow('No anomalies found.'));
       return;
     }
-    tbody.innerHTML = rows.map(r => `
-      <tr>
-        <td>${fmt(r.timestamp)}</td>
-        <td>${r.sensor_id ?? '—'}</td>
-        <td>${r.location   ?? '—'}</td>
-        <td><span class="badge">${r.anomaly_type ?? '—'}</span></td>
-        <td>${r.confidence_score != null ? r.confidence_score.toFixed(2) : '—'}</td>
-        <td>${fmt(r.detected_at)}</td>
-      </tr>
-    `).join('');
+    for (const r of rows) {
+      const tr = document.createElement('tr');
+      tr.appendChild(makeTd(fmt(r.timestamp)));
+      tr.appendChild(makeTd(r.sensor_id ?? '\u2014'));
+      tr.appendChild(makeTd(r.location   ?? '\u2014'));
+      const badgeTd = document.createElement('td');
+      const badge   = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = r.anomaly_type ?? '\u2014';
+      badgeTd.appendChild(badge);
+      tr.appendChild(badgeTd);
+      tr.appendChild(makeTd(r.confidence_score != null ? r.confidence_score.toFixed(2) : '\u2014'));
+      tr.appendChild(makeTd(fmt(r.detected_at)));
+      tbody.appendChild(tr);
+    }
   }
 
   function updatePagination(total, page, pageSize) {
     const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
     const end   = Math.min(page * pageSize, total);
     document.getElementById('page-info').textContent =
-      total === 0 ? 'No results' : `Showing ${start}–${end} of ${total}`;
+      total === 0 ? 'No results' : `Showing ${start}\u2013${end} of ${total}`;
     document.getElementById('prev-btn').disabled = page <= 1;
     document.getElementById('next-btn').disabled = end >= total;
   }
@@ -290,7 +312,7 @@
     fetchAnomalies();
   }
 
-  // ── Filter change handlers ──────────────────────────────────────────────────
+  // --- Filter change handlers ---
   ['sensor-select', 'start-input', 'end-input'].forEach(id => {
     document.getElementById(id).addEventListener('change', () => {
       currentPage = 1;
@@ -298,7 +320,7 @@
     });
   });
 
-  // ── Ingest trigger ──────────────────────────────────────────────────────────
+  // --- Ingest trigger ---
   function showStatus(msg, type) {
     const el = document.getElementById('status-msg');
     el.textContent = msg;
@@ -309,7 +331,7 @@
   async function triggerIngest() {
     const btn = document.getElementById('ingest-btn');
     btn.disabled = true;
-    showStatus('Ingest triggered — the worker is running in the background.', 'info');
+    showStatus('Ingest triggered \u2014 the worker is running in the background.', 'info');
     try {
       const res = await fetch('/api/ingest', { method: 'POST' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -323,7 +345,7 @@
     }
   }
 
-  // ── Init ────────────────────────────────────────────────────────────────────
+  // --- Init ---
   loadSensors();
   fetchAnomalies();
 </script>

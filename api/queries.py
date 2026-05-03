@@ -14,7 +14,7 @@ GET_SENSORS = """
     ORDER BY sensor_id
 """
 
-# Base SELECT for anomalies — a WHERE clause and ORDER/LIMIT/OFFSET are appended
+# Base SELECT for anomalies - a WHERE clause and ORDER/LIMIT/OFFSET are appended
 # dynamically in main.py using safe parameterised queries.
 # location is fetched via a single join; sensor_id and timestamp filters use the
 # denormalized anomalies columns so no join is needed for filtering.

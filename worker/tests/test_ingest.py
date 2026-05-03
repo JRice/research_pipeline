@@ -15,7 +15,6 @@ import pytest
 from ingest import (
     _anomaly_tuples,
     download_s3_uri,
-    filter_eligible_sensors,
     resolve_input_csv,
 )
 
@@ -38,36 +37,6 @@ def _make_df(sensor_counts: dict) -> pd.DataFrame:
             row_id += 1
     return pd.DataFrame(rows)
 
-
-def test_sensor_with_history_is_eligible():
-    batch_df = _make_df({"SENSOR_A": 3, "SENSOR_B": 5})
-    history_df = _make_df({"SENSOR_A": 10})
-    result, skipped = filter_eligible_sensors(batch_df, history_df)
-    assert set(result["sensor_id"].unique()) == {"SENSOR_A"}
-    assert skipped == {"SENSOR_B"}
-
-
-def test_no_history_skips_all_sensors():
-    batch_df = _make_df({"SENSOR_A": 5})
-    result, skipped = filter_eligible_sensors(batch_df, pd.DataFrame())
-    assert result.empty
-    assert skipped == {"SENSOR_A"}
-
-
-def test_all_sensors_with_history_none_skipped():
-    batch_df = _make_df({"A": 3, "B": 5})
-    history_df = _make_df({"A": 10, "B": 8})
-    result, skipped = filter_eligible_sensors(batch_df, history_df)
-    assert set(result["sensor_id"].unique()) == {"A", "B"}
-    assert skipped == set()
-
-
-def test_original_df_is_not_mutated():
-    batch_df = _make_df({"GOOD": 5, "BAD": 2})
-    history_df = _make_df({"GOOD": 10})
-    original_len = len(batch_df)
-    filter_eligible_sensors(batch_df, history_df)
-    assert len(batch_df) == original_len
 
 
 def _base_df() -> pd.DataFrame:

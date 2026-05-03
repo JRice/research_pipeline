@@ -11,7 +11,7 @@ import psycopg2.extras
 import pytest
 
 
-# ── Seed helpers ──────────────────────────────────────────────────────────────
+# -- Seed helpers --------------------------------------------------------------
 
 def _insert_readings(conn, rows: list[dict]) -> None:
     with conn.cursor() as cur:
@@ -58,7 +58,7 @@ def _reading(id: int, sensor_id: str, ts: str = "2024-01-01T00:00:00+00:00",
     }
 
 
-# ── /health ───────────────────────────────────────────────────────────────────
+# -- /health -------------------------------------------------------------------
 
 def test_health_ok_with_real_schema(client):
     resp = client.get("/health")
@@ -66,7 +66,7 @@ def test_health_ok_with_real_schema(client):
     assert resp.json() == {"status": "ok", "db": "ok"}
 
 
-# ── /sensors ─────────────────────────��───────────────────────────────���────────
+# -- /sensors ---------------------------------------------------------------------
 
 def test_sensors_empty(client, db_conn):
     resp = client.get("/sensors")
@@ -88,7 +88,7 @@ def test_sensors_returns_correct_counts(client, db_conn):
     assert data["HUMID_002"] == 1
 
 
-# ── /anomalies ────────────────────────────────────────────────────────────────
+# -- /anomalies ----------------------------------------------------------------
 
 def test_anomalies_empty(client, db_conn):
     resp = client.get("/anomalies")

@@ -1,12 +1,12 @@
 """
-FastAPI application — sensor anomaly pipeline.
+FastAPI application - sensor anomaly pipeline.
 
 Endpoints
 ---------
 GET  /health      liveness + database check
 GET  /anomalies   paginated anomaly query (filter by sensor_id, date range)
 GET  /sensors     distinct sensor IDs with reading counts
-POST /ingest      convenience trigger — runs the worker via docker compose run
+POST /ingest      convenience trigger - runs the worker via docker compose run
 """
 
 import logging
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Sensor Pipeline API", version="1.0.0")
 
 
-# ── Database dependency ───────────────────────────────────────────────────────
+# --- Database dependency ---------------
 
 def get_conn() -> Generator[psycopg2.extensions.connection, None, None]:
     url = os.environ.get("DATABASE_URL")
@@ -52,7 +52,7 @@ def get_conn() -> Generator[psycopg2.extensions.connection, None, None]:
         conn.close()
 
 
-# ── Query builder ─────────────────────────────────────────────────────────────
+# --- Query builder -------------------
 
 def _anomaly_where(
     sensor_id: Optional[str],
@@ -77,7 +77,7 @@ def _anomaly_where(
     return where, params
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# -- Routes --------------------------------------------------------------------
 
 @app.get("/health")
 def health(conn: psycopg2.extensions.connection = Depends(get_conn)) -> Dict[str, str]:
@@ -135,7 +135,7 @@ def list_sensors(
         return [dict(row) for row in cur.fetchall()]
 
 
-# ── Ingest trigger ────────────────────────────────────────────────────────────
+# -- Ingest trigger ------------------------------------------------------------
 # Convenience endpoint for demo purposes only.
 # Requires /var/run/docker.sock and the compose file to be mounted into this
 # container (see compose.yml api.volumes).
@@ -152,7 +152,7 @@ def _run_worker() -> None:
             logger.info("Worker completed successfully")
     except FileNotFoundError:
         logger.error(
-            "docker CLI not found — the API container needs docker.io installed "
+            "docker CLI not found - the API container needs docker.io installed "
             "and /var/run/docker.sock mounted"
         )
 
