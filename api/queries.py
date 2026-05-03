@@ -1,6 +1,11 @@
 """SQL query constants for the FastAPI application."""
 
-HEALTH_CHECK = "SELECT 1"
+HEALTH_CHECK = """
+    SELECT COUNT(*) AS tables_ready
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name IN ('sensor_readings', 'anomalies')
+"""
 
 GET_SENSORS = """
     SELECT sensor_id, COUNT(*) AS reading_count

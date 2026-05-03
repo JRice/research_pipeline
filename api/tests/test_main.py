@@ -37,7 +37,7 @@ def _make_mock_conn(fetchone_return=None, fetchall_return=None):
 # ── /health ───────────────────────────────────────────────────────────────────
 
 def test_health_ok():
-    mock_conn = _make_mock_conn()
+    mock_conn = _make_mock_conn(fetchone_return={"tables_ready": 2})
 
     def override():
         yield mock_conn
@@ -50,6 +50,23 @@ def test_health_ok():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["db"] == "ok"
+
+    app.dependency_overrides.clear()
+
+
+def test_health_schema_not_initialised_returns_503():
+    # Tables present = 1 means migration has not run yet.
+    mock_conn = _make_mock_conn(fetchone_return={"tables_ready": 1})
+
+    def override():
+        yield mock_conn
+
+    app.dependency_overrides[get_conn] = override
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.get("/health")
+    assert resp.status_code == 503
+    assert "schema" in resp.json()["detail"]["db"].lower()
 
     app.dependency_overrides.clear()
 

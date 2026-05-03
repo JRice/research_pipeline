@@ -25,12 +25,13 @@ through a FastAPI backend and a static HTML dashboard.
                           |              +- inserts anomalies        |
                           +------------------------------------------+
 
-  AWS (Terraform scaffold)
+  AWS (Terraform)
   ------------------------------------------------------------------
   Internet -> ECS Fargate task (nginx :80 -> localhost:8000 <- api) -> RDS PostgreSQL
   nginx and api run as sidecars in one task; nginx holds the public IP.
   Worker runs as a separate ECS RunTask (on-demand, not a service).
-  ECR stores nginx, api, and worker images.
+  Migrate runs as a one-shot ECS task on every deploy before the app restarts.
+  ECR stores nginx, api, worker, and migrate images.
 ```
 
 ---
@@ -116,8 +117,8 @@ directly at `http://localhost:8000/` if you expose the API port.
 
 ## Terraform deployment
 
-> **Note**: Terraform is a scaffold -- `plan` works; `apply` is manual.
-> CI/CD handles image updates once the infrastructure is in place.
+Terraform manages all AWS infrastructure. Apply it once to provision VPC, RDS,
+ECR, ECS, IAM, S3, and Secrets Manager. After that, CI/CD handles every deploy.
 
 ### Prerequisites
 
@@ -160,9 +161,13 @@ aws logs tail /ecs/research-pipeline-worker \
 
 ### CI/CD flow (GitHub Actions)
 
-1. **test** -- runs `pytest` against `api/tests/` and `worker/tests/` (no DB required)
-2. **deploy** (main branch only) -- builds and pushes nginx, API, and worker images to
-   ECR, then forces a new ECS deployment via `aws ecs update-service`
+1. **test** -- runs `pytest` against `api/tests/` and `worker/tests/` with a live
+   PostgreSQL service container
+2. **docker-build** -- verifies all four images (nginx, api, worker, migrate) build
+   cleanly; runs on every PR and push to main
+3. **deploy** (main branch only) -- builds and pushes all four images to ECR, runs
+   the migrate ECS task and waits for it to exit 0, then forces a rolling update of
+   the app service via `aws ecs update-service`
 
 Required GitHub secrets/variables:
 
@@ -186,11 +191,14 @@ Required GitHub secrets/variables:
   in production.
 - **Single-AZ RDS** -- `multi_az = false` keeps costs low in the scaffold; flip it
   for production.
-- **No Secrets Manager** -- `DATABASE_URL` is passed as a plain ECS environment
-  variable. In production, store credentials in AWS Secrets Manager and reference
-  them via the task definition's `secrets` block.
-- **Terraform not wired into CI** -- infrastructure is applied manually once;
-  `aws ecs update-service` handles rolling image updates.
+- **S3 bucket has `force_destroy = true`** -- `terraform destroy` will delete the
+  data bucket and all its contents without manual intervention. This is intentional
+  for a short-lived exercise environment. Remove or set to `false` before using this
+  configuration for anything that holds data you want to keep.
+- **Terraform apply is manual** -- infrastructure is provisioned once with
+  `terraform apply`; CI/CD handles image builds, migrations, and rolling deploys
+  from that point on. Wiring `terraform apply` into CI would require remote state
+  and drift detection to be safe.
 - **POST /ingest mounts the Docker socket** -- this is intentionally a demo
   convenience. In production, use ECS RunTask, Step Functions, or a proper job
   scheduler instead.

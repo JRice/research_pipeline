@@ -12,6 +12,7 @@ env:
   AWS_REGION: us-east-2
   ECR_API_REPO: research-pipeline-api
   ECR_WORKER_REPO: research-pipeline-worker
+  ECR_MIGRATE_REPO: research-pipeline-migrate
   ECR_NGINX_REPO: research-pipeline-nginx
   ECS_CLUSTER: research-pipeline
   ECS_APP_SERVICE: research-pipeline-app
@@ -63,6 +64,53 @@ jobs:
             ./worker
           docker push "$REGISTRY/$ECR_WORKER_REPO:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_WORKER_REPO:latest"
+
+          docker build \
+            -t "$REGISTRY/$ECR_MIGRATE_REPO:$IMAGE_TAG" \
+            -t "$REGISTRY/$ECR_MIGRATE_REPO:latest" \
+            ./migrate
+          docker push "$REGISTRY/$ECR_MIGRATE_REPO:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_MIGRATE_REPO:latest"
+
+      - name: Run database migration
+        run: |
+          MIGRATE_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "$ECS_CLUSTER-migrate" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          # Reuse the app service network config so migrate reaches RDS
+          NET_CONFIG=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_APP_SERVICE" \
+            --query 'services[0].networkConfiguration' \
+            --output json)
+
+          TASK_ARN=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$MIGRATE_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$NET_CONFIG" \
+            --query 'tasks[0].taskArn' \
+            --output text)
+
+          echo "Migration task: $TASK_ARN"
+
+          aws ecs wait tasks-stopped \
+            --cluster "$ECS_CLUSTER" \
+            --tasks "$TASK_ARN"
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster "$ECS_CLUSTER" \
+            --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' \
+            --output text)
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "Migration failed (exit $EXIT_CODE) — check CloudWatch: /ecs/$ECS_CLUSTER-migrate"
+            exit 1
+          fi
+          echo "Migration succeeded"
 
       - name: Force ECS deployment
         run: |
