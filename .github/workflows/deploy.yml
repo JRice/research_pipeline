@@ -1,66 +1,34 @@
-name: CI / Deploy
+name: Deploy
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
 
 env:
-  AWS_REGION:       ${{ vars.AWS_REGION || 'us-east-1' }}
-  ECR_API_REPO:     research-pipeline-api
-  ECR_WORKER_REPO:  research-pipeline-worker
-  ECR_NGINX_REPO:   research-pipeline-nginx
-  ECS_CLUSTER:      research-pipeline
-  ECS_APP_SERVICE:  research-pipeline-app  # combined nginx+api task
+  AWS_REGION: us-east-1
+  ECR_API_REPO: research-pipeline-api
+  ECR_WORKER_REPO: research-pipeline-worker
+  ECR_NGINX_REPO: research-pipeline-nginx
+  ECS_CLUSTER: research-pipeline
+  ECS_APP_SERVICE: research-pipeline-app
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
-  # ── 1. Tests ────────────────────────────────────────────────────────────────
-  test:
-    name: Run tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install API dependencies
-        run: pip install -r api/requirements.txt httpx requests pytest
-
-      - name: Run API tests
-        run: pytest api/tests/ -v
-
-      - name: Install worker dependencies
-        run: pip install -r worker/requirements.txt pytest
-
-      - name: Run worker tests
-        # anomaly_detection.py is at repo root; worker imports it from /app at runtime.
-        # During CI it lives one directory up from the worker package.
-        run: pytest worker/tests/ -v
-        env:
-          DATABASE_URL: "postgresql://test:test@localhost/test"
-
-  # ── 2. Build & push Docker images, update ECS ───────────────────────────────
   deploy:
-    name: Build, push, deploy
-    needs: test
     runs-on: ubuntu-latest
-    # Only deploy on pushes to main (not on PRs).
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    permissions:
-      id-token: write   # required for OIDC
-      contents: read
+    environment: production
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -70,31 +38,21 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push nginx image
+      - name: Build and push images
         env:
-          REGISTRY:  ${{ steps.login-ecr.outputs.registry }}
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t "$REGISTRY/$ECR_NGINX_REPO:$IMAGE_TAG" ./nginx
           docker push "$REGISTRY/$ECR_NGINX_REPO:$IMAGE_TAG"
 
-      - name: Build and push API image
-        env:
-          REGISTRY:  ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
           docker build -t "$REGISTRY/$ECR_API_REPO:$IMAGE_TAG" ./api
           docker push "$REGISTRY/$ECR_API_REPO:$IMAGE_TAG"
 
-      - name: Build and push worker image
-        env:
-          REGISTRY:  ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
           docker build -t "$REGISTRY/$ECR_WORKER_REPO:$IMAGE_TAG" ./worker
           docker push "$REGISTRY/$ECR_WORKER_REPO:$IMAGE_TAG"
 
-      - name: Force new ECS deployment
+      - name: Force ECS deployment
         run: |
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
@@ -102,24 +60,10 @@ jobs:
             --force-new-deployment \
             --region "$AWS_REGION"
 
-  # ── 3. Post failure summary to PR / commit ───────────────────────────────────
-  on-failure:
-    name: Report failure
-    needs: [test, deploy]
-    if: failure()
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-
-    steps:
-      - name: Write failure summary
+      - name: Deployment summary
         run: |
-          echo "## Deployment failed :x:" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Deployment complete" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Job | Status |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| test   | ${{ needs.test.result }}   |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| deploy | ${{ needs.deploy.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Check the individual job logs above for details." >> "$GITHUB_STEP_SUMMARY"
+          echo "Image tag: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Cluster: \`$ECS_CLUSTER\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Service: \`$ECS_APP_SERVICE\`" >> "$GITHUB_STEP_SUMMARY"

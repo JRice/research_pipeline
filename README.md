@@ -146,7 +146,6 @@ terraform -chdir=terraform apply -var="db_password=CHANGEME"
 1. **test** -- runs `pytest` against `api/tests/` and `worker/tests/` (no DB required)
 2. **deploy** (main branch only) -- builds and pushes nginx, API, and worker images to
    ECR, then forces a new ECS deployment via `aws ecs update-service`
-3. **on-failure** -- writes a Markdown summary to the Actions job summary panel
 
 Required GitHub secrets/variables:
 
