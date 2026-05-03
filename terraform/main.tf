@@ -174,6 +174,18 @@ resource "aws_ecr_repository" "nginx" {
   image_scanning_configuration { scan_on_push = true }
 }
 
+# ── Secrets Manager — database URL ───────────────────────────────────────────
+
+resource "aws_secretsmanager_secret" "db_url" {
+  name        = "${var.project_name}/database-url"
+  description = "Full DATABASE_URL injected into ECS tasks at launch"
+}
+
+resource "aws_secretsmanager_secret_version" "db_url" {
+  secret_id     = aws_secretsmanager_secret.db_url.id
+  secret_string = local.db_url
+}
+
 # ── IAM — ECS task execution ──────────────────────────────────────────────────
 
 data "aws_iam_policy_document" "ecs_assume_role" {
@@ -195,6 +207,20 @@ resource "aws_iam_role" "ecs_task_execution" {
 resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
   role       = aws_iam_role.ecs_task_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+data "aws_iam_policy_document" "read_db_secret" {
+  statement {
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.db_url.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_read_db_secret" {
+  name   = "read-db-secret"
+  role   = aws_iam_role.ecs_task_execution.name
+  policy = data.aws_iam_policy_document.read_db_secret.json
 }
 
 # ── ECS Fargate cluster ───────────────────────────────────────────────────────
@@ -293,8 +319,8 @@ resource "aws_ecs_task_definition" "app" {
       # Port 8000 is NOT in portMappings — it is internal to the task only.
       # nginx reaches it via localhost:8000.
 
-      environment = [
-        { name = "DATABASE_URL", value = local.db_url }
+      secrets = [
+        { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.db_url.arn }
       ]
 
       healthCheck = {
@@ -333,8 +359,11 @@ resource "aws_ecs_task_definition" "worker" {
     essential = true
 
     environment = [
-      { name = "DATABASE_URL", value = local.db_url },
-      { name = "INPUT_CSV",    value = "/data/sample_data.csv" }
+      { name = "INPUT_CSV", value = "/data/sample_data.csv" }
+    ]
+
+    secrets = [
+      { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.db_url.arn }
     ]
 
     logConfiguration = {
