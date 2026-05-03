@@ -1,7 +1,7 @@
 """
 Smoke tests for the FastAPI application.
 
-All database calls are mocked — no real Postgres required.
+All database calls are mocked - no real Postgres required.
 """
 
 import sys
@@ -19,7 +19,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 from main import app, get_conn
 
 
-# ── Mock DB factory ───────────────────────────────────────────────────────────
+# -- Mock DB factory -----------------------------------------------------------
 
 def _make_mock_conn(fetchone_return=None, fetchall_return=None):
     """Return a mock psycopg2 connection whose cursor honours fetchone/fetchall."""
@@ -34,10 +34,10 @@ def _make_mock_conn(fetchone_return=None, fetchall_return=None):
     return conn
 
 
-# ── /health ───────────────────────────────────────────────────────────────────
+# -- /health -------------------------------------------------------------------
 
 def test_health_ok():
-    mock_conn = _make_mock_conn()
+    mock_conn = _make_mock_conn(fetchone_return={"tables_ready": 2})
 
     def override():
         yield mock_conn
@@ -50,6 +50,23 @@ def test_health_ok():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["db"] == "ok"
+
+    app.dependency_overrides.clear()
+
+
+def test_health_schema_not_initialised_returns_503():
+    # Tables present = 1 means migration has not run yet.
+    mock_conn = _make_mock_conn(fetchone_return={"tables_ready": 1})
+
+    def override():
+        yield mock_conn
+
+    app.dependency_overrides[get_conn] = override
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.get("/health")
+    assert resp.status_code == 503
+    assert "schema" in resp.json()["detail"]["db"].lower()
 
     app.dependency_overrides.clear()
 
@@ -70,7 +87,7 @@ def test_health_db_error_returns_503():
     app.dependency_overrides.clear()
 
 
-# ── /anomalies ────────────────────────────────────────────────────────────────
+# -- /anomalies ----------------------------------------------------------------
 
 def test_anomalies_empty_db():
     mock_conn = _make_mock_conn(fetchone_return={"count": 0}, fetchall_return=[])
@@ -125,7 +142,7 @@ def test_anomalies_page_size_cap():
     app.dependency_overrides.clear()
 
 
-# ── /sensors ──────────────────────────────────────────────────────────────────
+# -- /sensors ------------------------------------------------------------------
 
 def test_sensors_empty_db():
     mock_conn = _make_mock_conn(fetchall_return=[])

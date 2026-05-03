@@ -8,8 +8,6 @@ from pathlib import Path
 
 # Allow importing worker modules directly when running pytest from repo root.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-# anomaly_detection.py lives at repo root.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pandas as pd
 import pytest
@@ -17,7 +15,6 @@ import pytest
 from ingest import (
     _anomaly_tuples,
     download_s3_uri,
-    filter_eligible_sensors,
     resolve_input_csv,
 )
 
@@ -40,31 +37,6 @@ def _make_df(sensor_counts: dict) -> pd.DataFrame:
             row_id += 1
     return pd.DataFrame(rows)
 
-
-def test_short_sensor_is_excluded():
-    df = _make_df({"LONG": 25, "SHORT": 5})
-    result = filter_eligible_sensors(df, window_size=20)
-    assert "LONG" in result["sensor_id"].values
-    assert "SHORT" not in result["sensor_id"].values
-
-
-def test_sensor_exactly_at_threshold_is_included():
-    df = _make_df({"AT_THRESHOLD": 20})
-    result = filter_eligible_sensors(df, window_size=20)
-    assert len(result) == 20
-
-
-def test_all_sensors_short_returns_empty():
-    df = _make_df({"A": 3, "B": 7})
-    result = filter_eligible_sensors(df, window_size=20)
-    assert result.empty
-
-
-def test_original_df_is_not_mutated():
-    df = _make_df({"GOOD": 30, "BAD": 2})
-    original_len = len(df)
-    filter_eligible_sensors(df, window_size=20)
-    assert len(df) == original_len
 
 
 def _base_df() -> pd.DataFrame:

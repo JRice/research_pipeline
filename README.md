@@ -1,207 +1,482 @@
 # Research Sensor Pipeline
 
-A containerised pipeline that ingests environmental sensor readings (CSV), runs
-rolling-window anomaly detection, stores results in PostgreSQL, and serves them
-through a FastAPI backend and a static HTML dashboard.
+A containerized environmental sensor pipeline. It generates or ingests CSV sensor readings, stores them in PostgreSQL, detects rolling-window anomalies, exposes results through a FastAPI API, and serves a small static dashboard through nginx.
+
+The repository supports two execution modes:
+
+- local development with Docker Compose
+- AWS deployment with Terraform, ECR, ECS Fargate, RDS PostgreSQL, S3, Secrets Manager, CloudWatch, and GitHub Actions
 
 ---
 
 ## Architecture
 
-```
-                          +------------------------------------------+
-                          |             Docker Compose               |
-                          |                                          |
-  browser --------------> |  nginx :8080                            |
-                          |    +- /api/*  ----------------> api :8000|
-                          |    +- /static/  (index.html)            |
-                          |                    |                     |
-                          |                    v                     |
-                          |             postgres :5432               |
-                          |                    ^                     |
-                          |             worker (one-shot)            |
-                          |              +- reads CSV                |
-                          |              +- inserts sensor_readings  |
-                          |              +- inserts anomalies        |
-                          +------------------------------------------+
+```text
+Local Docker Compose
+--------------------
 
-  AWS (Terraform scaffold)
-  ------------------------------------------------------------------
-  Internet -> ECS Fargate task (nginx :80 -> localhost:8000 <- api) -> RDS PostgreSQL
-  nginx and api run as sidecars in one task; nginx holds the public IP.
-  Worker runs as a separate ECS RunTask (on-demand, not a service).
-  ECR stores nginx, api, and worker images.
+browser
+  |
+  v
+nginx :8080
+  |-- /              -> static dashboard from nginx/static/index.html
+  |-- /static/*      -> static assets
+  |-- /api/*         -> api :8000, with /api stripped before proxying
+                         |
+                         v
+                      postgres :5432
+                         ^
+                         |
+                      worker, run on demand
+                      - reads local CSV from /data/sample_data.csv by default
+                      - inserts sensor_readings
+                      - runs anomaly detection
+                      - inserts anomalies
+
+AWS
+---
+
+Internet
+  |
+  v
+ECS Fargate app task, public subnet, public IP, no ALB
+  |
+  |-- nginx container :80, public entry point
+  |-- api container :8000, internal to the same task network namespace
+        |
+        v
+     RDS PostgreSQL, private subnet
+
+Additional AWS components:
+- ECR repositories for nginx, api, worker, and migrate images
+- S3 data bucket for worker CSV input
+- Secrets Manager secret containing DATABASE_URL
+- ECS RunTask worker task for one-shot ingestion
+- ECS RunTask migrate task for schema initialization/migration
+- CloudWatch log groups for nginx, api, worker, and migrate
+```
+
+In Compose, nginx proxies to the `api` service name. In ECS, nginx and the API run as sidecars in the same Fargate task, so nginx proxies to `localhost:8000`.
+
+---
+
+## Repository layout
+
+```text
+api/                  FastAPI application and API tests
+worker/               One-shot CSV ingestion worker, anomaly detector, worker tests
+migrate/              One-shot schema initializer/migration image
+db/init.sql           PostgreSQL schema for sensor_readings and anomalies
+nginx/                nginx gateway and static dashboard
+terraform/            AWS infrastructure definition
+data/                 Local sample-data mount point
+scripts/              AWS helper scripts, including worker RunTask helper
+compose.yml           Local Docker Compose stack
+generate_data.py      Synthetic sensor CSV generator
+.env.example          Example local/AWS environment variables
 ```
 
 ---
 
-## Quickstart
+## Local quickstart
 
 ### 1. Generate sample data
 
 ```bash
-# Install generator dependencies (numpy is enough locally)
-pip install numpy pandas
-python generate_data.py -n 5000 --anomaly-rate 0.05 -o data/sample_data.csv
+pip install numpy
+python generate_data.py -n 5000 --anomaly-rate 0.05 --seed 42 -o data/sample_data.csv
 ```
 
-### 2. Start all services
+The generator writes CSV columns expected by the worker:
+
+```text
+id,timestamp,sensor_id,temperature,humidity,pressure,location
+```
+
+It generates readings for five configured sensors and can inject spikes, drifts, sensor failures, and noise bursts. Useful options include:
+
+```bash
+python generate_data.py --help
+python generate_data.py -n 1000 -o data/sample_data.csv
+python generate_data.py -n 50000 -o data/large_dataset.csv --anomaly-rate 0.05
+python generate_data.py -n 500 --seed 42 --start-time 2024-01-01T00:00:00Z
+```
+
+### 2. Start the stack
 
 ```bash
 docker compose up --build
 ```
 
-The first run initialises the database schema from `db/init.sql` automatically.
+The PostgreSQL container initializes the schema from `db/init.sql` on first database creation.
 
-### 3. Run the ingestion worker
+### 3. Run ingestion
+
+In another shell:
 
 ```bash
 docker compose run --rm worker
-# or point at a different file:
+```
+
+To ingest a specific file mounted under `./data`:
+
+```bash
 docker compose run --rm worker python ingest.py /data/my_data.csv
-# wipe and reload:
+```
+
+To truncate both tables and reload:
+
+```bash
 docker compose run --rm worker python ingest.py --reset
 ```
 
+The worker waits for PostgreSQL, loads the CSV, inserts readings with `ON CONFLICT DO NOTHING`, fetches prior per-sensor history for rolling-window context, runs anomaly detection, inserts new anomalies with `ON CONFLICT DO NOTHING`, and prints a summary.
+
 ### 4. Open the dashboard
 
-Navigate to **http://localhost:8080** -- the table populates from the API.
+Open:
 
-### 5. Trigger ingest from the UI
+```text
+http://localhost:8080
+```
 
-Click **Trigger Ingest** in the dashboard (calls `POST /api/ingest`). This
-requires the Docker socket to be mounted into the API container (already
-configured in `compose.yml`).
+The dashboard loads sensor options from `/api/sensors`, loads anomaly rows from `/api/anomalies`, supports sensor and datetime filtering, and paginates 50 results per page.
 
----
+### 5. Trigger ingestion from the dashboard or API
 
-## Environment variables
+Click **Trigger Ingest** in the dashboard, or call:
 
-| Variable        | Default (compose)                                      | Description                                 |
-|-----------------|--------------------------------------------------------|---------------------------------------------|
-| `DATABASE_URL`  | `postgresql://pipeline:pipeline@postgres:5432/...`    | Full Postgres connection URL                |
-| `INPUT_CSV`     | `/data/sample_data.csv`                               | Local CSV path inside the worker container  |
-| `INPUT_S3_URI`  | (none)                                                | S3 URI used by the ECS worker task          |
-| `COMPOSE_FILE`  | `/app/compose.yml`                                    | Compose file path seen by API (ingest only) |
-| `AWS_REGION`    | `us-east-1`                                           | AWS region for Terraform / CI               |
-| `AWS_ROLE_ARN`  | (none)                                                | IAM role for GitHub Actions OIDC auth       |
+```bash
+curl -X POST http://localhost:8080/api/ingest
+```
 
-Copy `.env.example` to `.env` and edit before running locally outside Docker.
+This starts a background thread in the API container that runs:
+
+```bash
+docker compose -f /app/compose.yml run --rm worker
+```
+
+This is a local demo convenience. It requires the API image to contain the Docker CLI and requires the host Docker socket plus `compose.yml` to be mounted into the API container, as configured in `compose.yml`.
 
 ---
 
 ## API reference
 
-All endpoints are available at `http://localhost:8080/api/` through nginx, or
-directly at `http://localhost:8000/` if you expose the API port.
+Through nginx, use:
 
-| Method | Path          | Description                                           |
-|--------|---------------|-------------------------------------------------------|
-| GET    | `/health`     | Liveness + DB check -> `{"status":"ok","db":"ok"}`    |
-| GET    | `/sensors`    | Distinct sensor IDs with reading counts               |
-| GET    | `/anomalies`  | Paginated anomaly list (see params below)             |
-| POST   | `/ingest`     | Trigger worker (202 Accepted + `job_id`)              |
+```text
+http://localhost:8080/api/...
+```
 
-### GET /anomalies query parameters
+If talking directly to the API container, use:
 
-| Param       | Type     | Default | Description               |
-|-------------|----------|---------|---------------------------|
-| `sensor_id` | string   | (none)  | Filter by sensor ID       |
-| `start`     | ISO 8601 | (none)  | Timestamp lower bound     |
-| `end`       | ISO 8601 | (none)  | Timestamp upper bound     |
-| `page`      | int >= 1 | 1       | Page number               |
-| `page_size` | 1-200    | 50      | Results per page          |
+```text
+http://localhost:8000/...
+```
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Checks that the API can connect to PostgreSQL and that both expected tables exist. Returns `{"status":"ok","db":"ok"}` on success. |
+| `GET` | `/sensors` | Returns distinct sensor IDs and reading counts. |
+| `GET` | `/anomalies` | Returns paginated anomaly records. |
+| `POST` | `/ingest` | Starts the local Docker Compose worker asynchronously and returns `202 Accepted` with a `job_id`. |
+
+### `GET /anomalies` query parameters
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `sensor_id` | string | none | Filter by sensor ID. |
+| `start` | ISO datetime | none | Inclusive lower timestamp bound. |
+| `end` | ISO datetime | none | Inclusive upper timestamp bound. |
+| `page` | integer, `>= 1` | `1` | Result page. |
+| `page_size` | integer, `1..200` | `50` | Results per page. |
+
+Example:
+
+```bash
+curl 'http://localhost:8080/api/anomalies?sensor_id=TEMP_001&page=1&page_size=25'
+```
+
+The response shape is:
+
+```json
+{
+  "total": 123,
+  "page": 1,
+  "page_size": 25,
+  "results": []
+}
+```
+
+---
+
+## Database schema
+
+`db/init.sql` creates two tables.
+
+`sensor_readings` stores the raw readings:
+
+```text
+id, timestamp, sensor_id, temperature, humidity, pressure, location
+```
+
+`anomalies` stores detected anomalies:
+
+```text
+id, sensor_data_id, sensor_id, timestamp, anomaly_type, confidence_score, detected_at
+```
+
+Notable schema details:
+
+- `sensor_readings.id` is the primary key and comes from the CSV.
+- `anomalies.sensor_data_id` references `sensor_readings.id`.
+- `anomalies` denormalizes `sensor_id` and `timestamp` so the API can filter anomalies without joining for every predicate.
+- `UNIQUE (sensor_data_id, anomaly_type)` prevents duplicate anomaly rows when the same data is reprocessed.
+- Indexes exist on `(sensor_id, timestamp)` for both readings and anomalies.
+
+---
+
+## Anomaly detection behavior
+
+The worker uses `worker/anomaly_detection.py`.
+
+Current behavior:
+
+- processes each `sensor_id` independently
+- checks `temperature`, `humidity`, and `pressure`
+- computes rolling mean and standard deviation over prior readings only, using `shift(1)`
+- uses a default rolling window of 20 readings
+- requires at least 4 prior readings before evaluating a point
+- flags readings whose absolute z-score is greater than the default threshold of 2.0
+- emits anomaly types named `temperature_anomaly`, `humidity_anomaly`, and `pressure_anomaly`
+- stores the absolute z-score as `confidence_score`
+
+For incremental ingestion, the worker fetches up to `window_size` prior rows per sensor from the database, prepends that history to the new batch for detection, then discards any anomalies that belong to historical rows. This allows rolling-window detection to span multiple ingests without re-inserting old anomalies.
+
+---
+
+## Environment variables
+
+| Variable | Local default / source | Description |
+| --- | --- | --- |
+| `DATABASE_URL` | `postgresql://pipeline:pipeline@postgres:5432/sensor_pipeline` in Compose | Full PostgreSQL connection URL. Required by API, worker, and migrate task. In ECS it is injected from Secrets Manager. |
+| `INPUT_CSV` | `/data/sample_data.csv` in Compose | Local worker CSV path. Used when `INPUT_S3_URI` is not set and no CLI path is supplied. |
+| `INPUT_S3_URI` | unset locally; set in Terraform worker task | S3 URI for AWS worker input. Takes precedence over `INPUT_CSV`. |
+| `COMPOSE_FILE` | `/app/compose.yml` in Compose | Compose file path as seen from inside the API container for `POST /ingest`. |
+| `API_HOST` | `api` in Compose; `localhost` in ECS | nginx upstream host for API proxying. |
+| `AWS_REGION` | Terraform default is `us-east-2`; deploy workflow also uses `us-east-2` | AWS region used by Terraform, scripts, and deployment. Keep `.env`, Terraform, scripts, and workflow values aligned. |
+| `AWS_ROLE_ARN` | GitHub secret | IAM role assumed by GitHub Actions via OIDC. |
+| `ECS_CLUSTER` | `research-pipeline` | ECS cluster name used by deployment/helper scripts. |
+| `ECS_APP_SERVICE` | `research-pipeline-app` | ECS service name for the combined nginx+api app task. |
+
+Copy `.env.example` to `.env` when running local commands outside Compose, but note that Compose itself sets the important container environment variables directly in `compose.yml`.
+
+---
+
+## Tests and local validation
+
+Run API tests:
+
+```bash
+pip install -r api/requirements.txt httpx requests pytest
+DATABASE_URL=postgresql://test:test@localhost:5432/test pytest api/tests/ -v
+```
+
+Run worker tests:
+
+```bash
+pip install -r worker/requirements.txt pytest
+DATABASE_URL=postgresql://test:test@localhost:5432/test pytest worker/tests/ -v
+```
+
+The GitHub Actions CI workflow starts a PostgreSQL 16 service container, installs API and worker dependencies separately, runs both test suites, and then verifies that the nginx, api, worker, and migrate Docker images build successfully.
 
 ---
 
 ## Terraform deployment
 
-> **Note**: Terraform is a scaffold -- `plan` works; `apply` is manual.
-> CI/CD handles image updates once the infrastructure is in place.
+Terraform manages the AWS infrastructure.
+
+### What Terraform creates
+
+- VPC with two public and two private subnets
+- Internet gateway and public route table
+- security group for public HTTP access to nginx on port 80
+- security group allowing RDS PostgreSQL access from the app security group
+- private, single-AZ RDS PostgreSQL 16 instance
+- ECR repositories for api, worker, migrate, and nginx
+- private S3 data bucket with public access blocked and `force_destroy = true`
+- Secrets Manager secret for `DATABASE_URL`
+- ECS task execution role and task role
+- S3 read permissions for the worker task role
+- ECS Fargate cluster with container insights enabled
+- CloudWatch log groups with 7-day retention
+- ECS app task definition containing nginx and API sidecars
+- ECS worker task definition for one-shot `run-task` ingestion
+- ECS migrate task definition for one-shot schema initialization
+- ECS service for the app task
 
 ### Prerequisites
 
-- AWS account with appropriate permissions
-- OIDC trust relationship between the repo and the `AWS_ROLE_ARN` IAM role
-- (Optional) S3 bucket for remote state -- uncomment the `backend "s3"` block in
-  `terraform/main.tf` and fill in your bucket name
+- AWS account and credentials with permission to create the above resources
+- Terraform `>= 1.6`
+- AWS CLI and `jq` for helper scripts
+- Docker for building images
+- GitHub Actions OIDC role stored as the `AWS_ROLE_ARN` repository secret
+- ECR repositories created by Terraform before the first deploy workflow expects to push images
 
-### Steps
+### Apply infrastructure
 
 ```bash
-# 1. Initialise
 terraform -chdir=terraform init
-
-# 2. Review the plan (no AWS changes yet)
 terraform -chdir=terraform plan -var="db_password=CHANGEME"
-
-# 3. Apply (creates VPC, RDS, ECR, ECS, IAM, S3)
 terraform -chdir=terraform apply -var="db_password=CHANGEME"
-
-# 4. Push initial Docker images to the ECR repos shown in outputs
-# (GitHub Actions handles subsequent pushes)
 ```
 
-### One-off ECS worker run
+Alternatively, provide the password through an environment variable:
 
 ```bash
-# Generate sample data locally
+export TF_VAR_db_password='CHANGEME'
+terraform -chdir=terraform apply
+```
+
+The optional remote-state backend is commented out in `terraform/main.tf`. For a shared or long-lived environment, configure that backend before running `terraform init`.
+
+### Find useful outputs
+
+```bash
+terraform -chdir=terraform output
+terraform -chdir=terraform output -raw data_bucket_name
+terraform -chdir=terraform output -raw worker_task_family
+terraform -chdir=terraform output -raw migrate_task_family
+```
+
+The `app_public_ip_note` output contains an AWS CLI pipeline for finding the current public IP of the ECS app task.
+
+---
+
+## Initial and subsequent image deployment
+
+The deployment workflow runs on pushes to `main`. It:
+
+1. assumes the AWS role from `secrets.AWS_ROLE_ARN`
+2. logs in to ECR
+3. builds and pushes nginx, api, worker, and migrate images tagged with both the Git commit SHA and `latest`
+4. runs the migrate ECS task and waits for it to stop
+5. fails the deployment if the migrate container exits nonzero
+6. forces a new deployment of the app ECS service
+7. writes a short deployment summary to the GitHub Actions job summary
+
+The workflow currently uses fixed environment values:
+
+```text
+AWS_REGION=us-east-2
+ECR_API_REPO=research-pipeline-api
+ECR_WORKER_REPO=research-pipeline-worker
+ECR_MIGRATE_REPO=research-pipeline-migrate
+ECR_NGINX_REPO=research-pipeline-nginx
+ECS_CLUSTER=research-pipeline
+ECS_APP_SERVICE=research-pipeline-app
+```
+
+These names must stay aligned with Terraform variables and outputs. If `project_name`, `environment`, or `aws_region` changes in Terraform, update the workflow or parameterize it before relying on CI/CD.
+
+---
+
+## Running the AWS worker task
+
+Generate or choose a CSV locally:
+
+```bash
 python generate_data.py -n 10000 -o data/sample_data.csv --seed 42
+```
 
-# Upload and run the worker task against the S3 object
+Upload it to the Terraform-created S3 bucket and run the worker task:
+
+```bash
 scripts/aws_run_worker.sh
+```
 
-# Watch the worker logs
+The script defaults to:
+
+```text
+AWS_REGION=us-east-2
+TF_DIR=terraform
+DATA_FILE=data/sample_data.csv
+DATA_KEY=sample_data.csv
+ECS_CLUSTER=research-pipeline
+TASK_FAMILY=$(terraform -chdir=terraform output -raw worker_task_family)
+```
+
+It uploads the file to:
+
+```text
+s3://<terraform data_bucket_name>/sample_data.csv
+```
+
+Then it starts the ECS worker task in the public subnets using the app security group. The worker task definition reads:
+
+```text
+INPUT_S3_URI=s3://<data bucket>/sample_data.csv
+```
+
+Watch worker logs with:
+
+```bash
 aws logs tail /ecs/research-pipeline-worker \
   --region us-east-2 \
   --since 15m \
   --follow
 ```
 
-### CI/CD flow (GitHub Actions)
+---
 
-1. **test** -- runs `pytest` against `api/tests/` and `worker/tests/` (no DB required)
-2. **deploy** (main branch only) -- builds and pushes nginx, API, and worker images to
-   ECR, then forces a new ECS deployment via `aws ecs update-service`
+## Destroying AWS resources
 
-Required GitHub secrets/variables:
+Because the Terraform S3 data bucket has `force_destroy = true`, `terraform destroy` can delete the bucket even if it contains uploaded CSV objects.
 
-| Name           | Kind     | Value                          |
-|----------------|----------|--------------------------------|
-| `AWS_ROLE_ARN` | Secret   | IAM role ARN for OIDC          |
-| `AWS_REGION`   | Variable | e.g. `us-east-1`              |
+```bash
+terraform -chdir=terraform destroy -var="db_password=CHANGEME"
+```
+
+For anything beyond a short-lived exercise environment, remove `force_destroy = true` or set it to `false` before storing data you intend to retain.
 
 ---
 
-## Known simplifications
+## Known simplifications and trade-offs
 
-- **nginx as gateway (no ALB)** -- both locally and in AWS, nginx is the public
-  entry point. In ECS, nginx and api run as sidecars in one Fargate task and
-  communicate over localhost. This keeps the architecture consistent across
-  environments. The trade-off vs. an ALB is no built-in health-based routing or
-  TLS termination at the load-balancer layer; add an NLB or ALB in front of the
-  ECS service if you need those.
-- **Dynamic public IP** -- without an ALB there's no stable DNS name; the task's
-  public IP changes on redeploy. Use an Elastic IP or Route 53 with a health check
-  in production.
-- **Single-AZ RDS** -- `multi_az = false` keeps costs low in the scaffold; flip it
-  for production.
-- **No Secrets Manager** -- `DATABASE_URL` is passed as a plain ECS environment
-  variable. In production, store credentials in AWS Secrets Manager and reference
-  them via the task definition's `secrets` block.
-- **Terraform not wired into CI** -- infrastructure is applied manually once;
-  `aws ecs update-service` handles rolling image updates.
-- **POST /ingest mounts the Docker socket** -- this is intentionally a demo
-  convenience. In production, use ECS RunTask, Step Functions, or a proper job
-  scheduler instead.
-- **No message queue** -- the pipeline is batch/on-demand. Adding SQS/Kafka would
-  be the natural next step for streaming ingest.
-- The RDS instance is in a private subnet, but the app task is in a public subnet
-  with a public IP and no NAT. ...Okay for the app reaching RDS because both are
-  inside the VPC and the RDS security group allows traffic from the app security
-  group. However, if we later move the ECS task to private subnets, it will need
-  NAT or VPC endpoints for ECR/CloudWatch.
-- The database password ends up in Terraform state. The state is local and
-  gitignored, but it's worth noting. The production-grade version would either
-  generate/store the DB password directly in Secrets Manager and avoid exposing
-  it broadly, or use RDS managed master password.
+- **No load balancer.** nginx is the public gateway in both Compose and ECS. In AWS, the ECS task receives a public IP directly. This avoids ALB setup but means there is no ALB health routing, TLS termination, or stable load-balancer DNS name.
+- **Dynamic public IP.** Redeploying the ECS service can change the public IP. Add an ALB, NLB, Elastic IP pattern, or Route 53 automation for a production-style endpoint.
+- **Single-AZ RDS.** `multi_az = false` keeps the environment smaller and cheaper, but it is not a highly available production database setup.
+- **RDS final snapshot is skipped.** `skip_final_snapshot = true` and `deletion_protection = false` make teardown easy but unsafe for durable data.
+- **S3 bucket is force-destroyed.** `force_destroy = true` is intentional for easy teardown, not for retained datasets.
+- **The database password is still in Terraform state.** The runtime `DATABASE_URL` is injected through Secrets Manager, but the password originates from Terraform input and is present in Terraform state. Use remote encrypted state and tighter secret handling for production.
+- **Terraform is not applied by CI/CD.** Terraform provisions infrastructure manually. GitHub Actions handles image builds, migration, and ECS service redeploys after infrastructure exists.
+- **`POST /ingest` is local-demo oriented.** It shells out to Docker Compose from inside the API container. In AWS, ingestion is handled by ECS RunTask, not by that endpoint.
+- **No message queue or streaming path.** Ingestion is batch/on-demand. SQS, Kafka, EventBridge, Step Functions, or scheduled ECS tasks would be natural extensions.
+- **No TLS.** The current public AWS entry point is HTTP on port 80. Add an ALB/ACM or another TLS termination layer for HTTPS.
+- **App task runs in public subnets.** It can reach private RDS through VPC routing and security groups. Moving the app to private subnets would require NAT or VPC endpoints for ECR, CloudWatch Logs, and other AWS APIs.
+
+---
+
+## Operational notes
+
+A typical local workflow is:
+
+```bash
+python generate_data.py -n 5000 --anomaly-rate 0.05 --seed 42 -o data/sample_data.csv
+docker compose up --build
+docker compose run --rm worker
+open http://localhost:8080
+```
+
+A typical AWS workflow is:
+
+```bash
+export TF_VAR_db_password='CHANGEME'
+terraform -chdir=terraform init
+terraform -chdir=terraform apply
+# push to main to let GitHub Actions build/push/deploy images
+python generate_data.py -n 10000 -o data/sample_data.csv --seed 42
+scripts/aws_run_worker.sh
+```

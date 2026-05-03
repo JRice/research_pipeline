@@ -16,5 +16,21 @@ INSERT_ANOMALIES = """
     RETURNING id
 """
 
+# Fetch the most recent `window_size` rows per sensor, excluding the just-inserted batch.
+# Used to build the rolling-window context before running anomaly detection.
+FETCH_PRIOR_HISTORY = """
+    WITH ranked AS (
+        SELECT id, timestamp, sensor_id, temperature, humidity, pressure, location,
+               ROW_NUMBER() OVER (PARTITION BY sensor_id ORDER BY timestamp DESC) AS rn
+        FROM sensor_readings
+        WHERE sensor_id = ANY(%s)
+          AND id != ALL(%s)
+    )
+    SELECT id, timestamp, sensor_id, temperature, humidity, pressure, location
+    FROM ranked
+    WHERE rn <= %s
+    ORDER BY sensor_id, timestamp
+"""
+
 # Truncate in dependency order (anomalies references sensor_readings).
 TRUNCATE_TABLES = "TRUNCATE anomalies, sensor_readings"

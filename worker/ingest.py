@@ -22,11 +22,9 @@ import psycopg2.extensions
 from psycopg2.extras import execute_values
 from dotenv import load_dotenv
 
-# anomaly_detection.py is mounted into /app at runtime (see compose.yml).
-# Do NOT rewrite this logic here.
 from anomaly_detection import AnomalyDetector
 
-from queries import INSERT_ANOMALIES, INSERT_READINGS, TRUNCATE_TABLES
+from queries import FETCH_PRIOR_HISTORY, INSERT_ANOMALIES, INSERT_READINGS, TRUNCATE_TABLES
 
 load_dotenv()
 
@@ -104,11 +102,25 @@ def insert_readings(conn: psycopg2.extensions.connection, df: pd.DataFrame) -> i
     return len(returned)
 
 
-def filter_eligible_sensors(df: pd.DataFrame, window_size: int) -> pd.DataFrame:
-    """Return only rows for sensors that have >= window_size readings in this batch."""
-    counts = df.groupby("sensor_id").size()
-    eligible_ids = counts[counts >= window_size].index
-    return df[df["sensor_id"].isin(eligible_ids)].copy()
+def fetch_prior_history(
+    conn: psycopg2.extensions.connection,
+    sensor_ids: List[str],
+    exclude_ids: set,
+    window_size: int,
+) -> pd.DataFrame:
+    """Fetch up to window_size prior rows per sensor from the DB, excluding the current batch."""
+    if not sensor_ids:
+        return pd.DataFrame()
+    with conn.cursor() as cur:
+        cur.execute(FETCH_PRIOR_HISTORY, (sensor_ids, list(exclude_ids), window_size))
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame()
+    cols = ["id", "timestamp", "sensor_id", "temperature", "humidity", "pressure", "location"]
+    history = pd.DataFrame(rows, columns=cols)
+    history["timestamp"] = pd.to_datetime(history["timestamp"], utc=True)
+    return history
+
 
 
 def _anomaly_tuples(anomalies: List[dict], df: pd.DataFrame) -> List[Tuple]:
@@ -177,20 +189,24 @@ def main() -> None:
     readings_inserted = insert_readings(conn, df)
 
     detector = AnomalyDetector()
-    eligible = filter_eligible_sensors(df, detector.window_size)
-    skipped = set(df["sensor_id"].unique()) - set(eligible["sensor_id"].unique())
-    if skipped:
-        logger.warning(
-            "Skipping anomaly detection for sensors with < %d readings: %s",
-            detector.window_size,
-            skipped,
-        )
+    new_ids = set(df["id"])
+    sensor_ids = list(df["sensor_id"].unique())
 
-    raw_anomalies: List[dict] = []
-    if not eligible.empty:
-        raw_anomalies = detector.detect_anomalies(eligible.to_dict("records"))
+    history_df = fetch_prior_history(conn, sensor_ids, new_ids, detector.window_size)
 
-    anom_rows = _anomaly_tuples(raw_anomalies, eligible)
+    # Prepend stored history so the rolling window spans prior ingests.
+    # When history is empty (first ingest), detection still runs against the
+    # batch itself; min_periods=4 in AnomalyDetector handles warm-up naturally.
+    combined = (
+        pd.concat([history_df, df]).sort_values(["sensor_id", "timestamp"])
+        if not history_df.empty
+        else df
+    )
+    all_anomalies = detector.detect_anomalies(combined.to_dict("records"))
+    # Discard any re-flagged history rows; only report anomalies in this batch.
+    raw_anomalies = [a for a in all_anomalies if a["sensor_data_id"] in new_ids]
+
+    anom_rows = _anomaly_tuples(raw_anomalies, df)
     anomalies_inserted = insert_anomalies(conn, anom_rows)
     conn.close()
 

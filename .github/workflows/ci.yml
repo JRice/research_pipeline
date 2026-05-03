@@ -67,3 +67,6 @@ jobs:
 
       - name: Build worker image
         run: docker build ./worker
+
+      - name: Build migrate image
+        run: docker build ./migrate

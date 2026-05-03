@@ -46,9 +46,6 @@ services:
       INPUT_CSV:    /data/sample_data.csv
     volumes:
       - ./data:/data
-      # Mount anomaly_detection.py from the repo root so edits are reflected
-      # without rebuilding the worker image.
-      - ./anomaly_detection.py:/app/anomaly_detection.py:ro
     depends_on:
       postgres:
         condition: service_healthy

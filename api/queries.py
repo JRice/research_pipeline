@@ -1,6 +1,11 @@
 """SQL query constants for the FastAPI application."""
 
-HEALTH_CHECK = "SELECT 1"
+HEALTH_CHECK = """
+    SELECT COUNT(*) AS tables_ready
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name IN ('sensor_readings', 'anomalies')
+"""
 
 GET_SENSORS = """
     SELECT sensor_id, COUNT(*) AS reading_count
@@ -9,7 +14,7 @@ GET_SENSORS = """
     ORDER BY sensor_id
 """
 
-# Base SELECT for anomalies — a WHERE clause and ORDER/LIMIT/OFFSET are appended
+# Base SELECT for anomalies - a WHERE clause and ORDER/LIMIT/OFFSET are appended
 # dynamically in main.py using safe parameterised queries.
 # location is fetched via a single join; sensor_id and timestamp filters use the
 # denormalized anomalies columns so no join is needed for filtering.
