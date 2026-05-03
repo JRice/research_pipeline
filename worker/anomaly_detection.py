@@ -64,12 +64,12 @@ class AnomalyDetector:
                 # (shift(1) excludes the current point so a spike can't dampen its own z-score)
                 rolling_mean = sensor_df[metric].shift(1).rolling(
                     window=self.window_size,
-                    min_periods=1
+                    min_periods=4
                 ).mean()
 
                 rolling_std = sensor_df[metric].shift(1).rolling(
                     window=self.window_size,
-                    min_periods=1
+                    min_periods=4
                 ).std()
 
                 # Calculate z-scores
