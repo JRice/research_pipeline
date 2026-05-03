@@ -184,3 +184,7 @@ Required GitHub secrets/variables:
   inside the VPC and the RDS security group allows traffic from the app security
   group. However, if we later move the ECS task to private subnets, it will need
   NAT or VPC endpoints for ECR/CloudWatch.
+- The database password ends up in Terraform state. The state is local and
+  gitignored, but it's worth noting. The production-grade version would either
+  generate/store the DB password directly in Secrets Manager and avoid exposing
+  it broadly, or use RDS managed master password.
