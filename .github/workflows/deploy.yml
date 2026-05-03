@@ -43,14 +43,26 @@ jobs:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t "$REGISTRY/$ECR_NGINX_REPO:$IMAGE_TAG" ./nginx
+          docker build \
+            -t "$REGISTRY/$ECR_NGINX_REPO:$IMAGE_TAG" \
+            -t "$REGISTRY/$ECR_NGINX_REPO:latest" \
+            ./nginx
           docker push "$REGISTRY/$ECR_NGINX_REPO:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_NGINX_REPO:latest"
 
-          docker build -t "$REGISTRY/$ECR_API_REPO:$IMAGE_TAG" ./api
+          docker build \
+            -t "$REGISTRY/$ECR_API_REPO:$IMAGE_TAG" \
+            -t "$REGISTRY/$ECR_API_REPO:latest" \
+            ./api
           docker push "$REGISTRY/$ECR_API_REPO:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_API_REPO:latest"
 
-          docker build -t "$REGISTRY/$ECR_WORKER_REPO:$IMAGE_TAG" ./worker
+          docker build \
+            -t "$REGISTRY/$ECR_WORKER_REPO:$IMAGE_TAG" \
+            -t "$REGISTRY/$ECR_WORKER_REPO:latest" \
+            ./worker
           docker push "$REGISTRY/$ECR_WORKER_REPO:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_WORKER_REPO:latest"
 
       - name: Force ECS deployment
         run: |
