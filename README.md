@@ -80,7 +80,8 @@ configured in `compose.yml`).
 | Variable        | Default (compose)                                      | Description                                 |
 |-----------------|--------------------------------------------------------|---------------------------------------------|
 | `DATABASE_URL`  | `postgresql://pipeline:pipeline@postgres:5432/...`    | Full Postgres connection URL                |
-| `INPUT_CSV`     | `/data/sample_data.csv`                               | CSV path inside the worker container        |
+| `INPUT_CSV`     | `/data/sample_data.csv`                               | Local CSV path inside the worker container  |
+| `INPUT_S3_URI`  | (none)                                                | S3 URI used by the ECS worker task          |
 | `COMPOSE_FILE`  | `/app/compose.yml`                                    | Compose file path seen by API (ingest only) |
 | `AWS_REGION`    | `us-east-1`                                           | AWS region for Terraform / CI               |
 | `AWS_ROLE_ARN`  | (none)                                                | IAM role for GitHub Actions OIDC auth       |
@@ -134,11 +135,27 @@ terraform -chdir=terraform init
 # 2. Review the plan (no AWS changes yet)
 terraform -chdir=terraform plan -var="db_password=CHANGEME"
 
-# 3. Apply (creates VPC, RDS, ECR, ECS, IAM)
+# 3. Apply (creates VPC, RDS, ECR, ECS, IAM, S3)
 terraform -chdir=terraform apply -var="db_password=CHANGEME"
 
 # 4. Push initial Docker images to the ECR repos shown in outputs
 # (GitHub Actions handles subsequent pushes)
+```
+
+### One-off ECS worker run
+
+```bash
+# Generate sample data locally
+python generate_data.py -n 10000 -o data/sample_data.csv --seed 42
+
+# Upload and run the worker task against the S3 object
+scripts/aws_run_worker.sh
+
+# Watch the worker logs
+aws logs tail /ecs/research-pipeline-worker \
+  --region us-east-2 \
+  --since 15m \
+  --follow
 ```
 
 ### CI/CD flow (GitHub Actions)

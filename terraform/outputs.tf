@@ -13,6 +13,11 @@ output "worker_ecr_repository_url" {
   value       = aws_ecr_repository.worker.repository_url
 }
 
+output "data_bucket_name" {
+  description = "S3 bucket used for worker CSV input."
+  value       = aws_s3_bucket.data.bucket
+}
+
 output "db_endpoint" {
   description = "RDS PostgreSQL endpoint (host:port)."
   value       = "${aws_db_instance.postgres.address}:${aws_db_instance.postgres.port}"
@@ -27,6 +32,18 @@ output "ecs_cluster_name" {
 output "ecs_app_service_name" {
   description = "ECS service name for the combined nginx+api app."
   value       = aws_ecs_service.app.name
+}
+
+output "worker_task_family" {
+  value = aws_ecs_task_definition.worker.family
+}
+
+output "public_subnet_ids" {
+  value = aws_subnet.public[*].id
+}
+
+output "app_security_group_id" {
+  value = aws_security_group.app.id
 }
 
 output "app_public_ip_note" {

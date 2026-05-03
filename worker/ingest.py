@@ -2,8 +2,8 @@
 """
 One-shot ingestion worker.
 
-Flow: wait for Postgres → optionally reset → load CSV → insert sensor_readings
-      → run anomaly detection (cold-start guarded) → insert anomalies → print summary.
+Flow: wait for Postgres -> optionally reset -> load CSV -> insert sensor_readings
+      -> run anomaly detection (cold-start guarded) -> insert anomalies -> print summary.
 """
 
 import argparse
@@ -11,8 +11,11 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 from typing import List, Tuple
+from urllib.parse import urlparse
 
+import boto3
 import pandas as pd
 import psycopg2
 import psycopg2.extensions
@@ -31,8 +34,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
 
-# ── Database helpers ──────────────────────────────────────────────────────────
-
 def wait_for_db(url: str, max_wait: int = 30) -> psycopg2.extensions.connection:
     """Retry until Postgres is accepting connections or max_wait seconds elapse."""
     deadline = time.time() + max_wait
@@ -44,11 +45,9 @@ def wait_for_db(url: str, max_wait: int = 30) -> psycopg2.extensions.connection:
         except psycopg2.OperationalError as exc:
             if time.time() >= deadline:
                 raise RuntimeError(f"Database not ready after {max_wait}s") from exc
-            logger.info("Waiting for database …")
+            logger.info("Waiting for database ...")
             time.sleep(2)
 
-
-# ── CSV loading ───────────────────────────────────────────────────────────────
 
 def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
@@ -56,7 +55,31 @@ def load_csv(path: str) -> pd.DataFrame:
     return df
 
 
-# ── Sensor readings ───────────────────────────────────────────────────────────
+def download_s3_uri(s3_uri: str, dest: str = "/tmp/input.csv") -> str:
+    parsed = urlparse(s3_uri)
+    if parsed.scheme != "s3":
+        raise ValueError(f"Expected s3:// URI, got: {s3_uri}")
+
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    if not bucket or not key:
+        raise ValueError(f"Invalid S3 URI: {s3_uri}")
+
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    boto3.client("s3").download_file(bucket, key, dest)
+    return dest
+
+
+def resolve_input_csv() -> str:
+    input_s3_uri = os.getenv("INPUT_S3_URI")
+    input_csv = os.getenv("INPUT_CSV")
+
+    if input_s3_uri:
+        return download_s3_uri(input_s3_uri)
+    if input_csv:
+        return input_csv
+    raise RuntimeError("Set INPUT_CSV for local runs or INPUT_S3_URI for AWS runs")
+
 
 def _reading_tuples(df: pd.DataFrame) -> List[Tuple]:
     return [
@@ -81,14 +104,8 @@ def insert_readings(conn: psycopg2.extensions.connection, df: pd.DataFrame) -> i
     return len(returned)
 
 
-# ── Anomaly detection ─────────────────────────────────────────────────────────
-
 def filter_eligible_sensors(df: pd.DataFrame, window_size: int) -> pd.DataFrame:
-    """Return only rows for sensors that have >= window_size readings in this batch.
-
-    The rolling-window detector needs at least window_size points before its
-    z-scores are meaningful; skipping short sensors avoids spurious flags.
-    """
+    """Return only rows for sensors that have >= window_size readings in this batch."""
     counts = df.groupby("sensor_id").size()
     eligible_ids = counts[counts >= window_size].index
     return df[df["sensor_id"].isin(eligible_ids)].copy()
@@ -124,15 +141,12 @@ def insert_anomalies(conn: psycopg2.extensions.connection, rows: List[Tuple]) ->
     return len(returned)
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest sensor CSV into PostgreSQL.")
     parser.add_argument(
         "csv_path",
         nargs="?",
-        default=os.environ.get("INPUT_CSV"),
-        help="Path to the CSV file (or set INPUT_CSV env var)",
+        help="Path to the CSV file (overrides INPUT_CSV / INPUT_S3_URI)",
     )
     parser.add_argument(
         "--reset",
@@ -141,8 +155,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.csv_path:
-        parser.error("CSV path is required (positional arg or INPUT_CSV env var)")
+    csv_path = args.csv_path or resolve_input_csv()
 
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -152,13 +165,13 @@ def main() -> None:
     conn = wait_for_db(url)
 
     if args.reset:
-        logger.info("Resetting tables …")
+        logger.info("Resetting tables ...")
         with conn.cursor() as cur:
             cur.execute(TRUNCATE_TABLES)
         conn.commit()
 
-    logger.info("Loading %s …", args.csv_path)
-    df = load_csv(args.csv_path)
+    logger.info("Loading %s ...", csv_path)
+    df = load_csv(csv_path)
     logger.info("Loaded %d rows", len(df))
 
     readings_inserted = insert_readings(conn, df)
@@ -182,7 +195,7 @@ def main() -> None:
     conn.close()
 
     elapsed = time.time() - start
-    print(f"\nIngest complete:")
+    print("\nIngest complete:")
     print(f"  Readings inserted : {readings_inserted}")
     print(f"  Anomalies inserted: {anomalies_inserted}")
     print(f"  Elapsed           : {elapsed:.2f}s")

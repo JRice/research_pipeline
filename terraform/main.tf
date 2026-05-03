@@ -34,6 +34,8 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_caller_identity" "current" {}
+
 # ── VPC ───────────────────────────────────────────────────────────────────────
 
 resource "aws_vpc" "main" {
@@ -174,6 +176,19 @@ resource "aws_ecr_repository" "nginx" {
   image_scanning_configuration { scan_on_push = true }
 }
 
+resource "aws_s3_bucket" "data" {
+  bucket = "${var.project_name}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 # ── Secrets Manager — database URL ───────────────────────────────────────────
 
 resource "aws_secretsmanager_secret" "db_url" {
@@ -204,6 +219,11 @@ resource "aws_iam_role" "ecs_task_execution" {
   assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
 }
 
+resource "aws_iam_role" "ecs_task" {
+  name               = "${var.project_name}-ecs-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
+}
+
 resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
   role       = aws_iam_role.ecs_task_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
@@ -221,6 +241,30 @@ resource "aws_iam_role_policy" "ecs_read_db_secret" {
   name   = "read-db-secret"
   role   = aws_iam_role.ecs_task_execution.name
   policy = data.aws_iam_policy_document.read_db_secret.json
+}
+
+resource "aws_iam_role_policy" "worker_s3_read" {
+  name = "${var.project_name}-worker-s3-read"
+  role = aws_iam_role.ecs_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "${aws_s3_bucket.data.arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = aws_s3_bucket.data.arn
+      }
+    ]
+  })
 }
 
 # ── ECS Fargate cluster ───────────────────────────────────────────────────────
@@ -352,6 +396,7 @@ resource "aws_ecs_task_definition" "worker" {
   cpu                      = 256
   memory                   = 512
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([{
     name      = "worker"
@@ -359,7 +404,7 @@ resource "aws_ecs_task_definition" "worker" {
     essential = true
 
     environment = [
-      { name = "INPUT_CSV", value = "/data/sample_data.csv" }
+      { name = "INPUT_S3_URI", value = "s3://${aws_s3_bucket.data.bucket}/sample_data.csv" }
     ]
 
     secrets = [
