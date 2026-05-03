@@ -200,6 +200,7 @@ resource "aws_s3_bucket_public_access_block" "data" {
 resource "aws_secretsmanager_secret" "db_url" {
   name        = "${var.project_name}/database-url"
   description = "Full DATABASE_URL injected into ECS tasks at launch"
+  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "db_url" {
