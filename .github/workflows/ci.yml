@@ -69,4 +69,4 @@ jobs:
         run: docker build ./worker
 
       - name: Build migrate image
-        run: docker build ./migrate
+        run: docker build -f migrate/Dockerfile .
