@@ -456,6 +456,16 @@ For anything beyond a short-lived exercise environment, remove `force_destroy = 
 - **No message queue or streaming path.** Ingestion is batch/on-demand. SQS, Kafka, EventBridge, Step Functions, or scheduled ECS tasks would be natural extensions.
 - **No TLS.** The current public AWS entry point is HTTP on port 80. Add an ALB/ACM or another TLS termination layer for HTTPS.
 - **App task runs in public subnets.** It can reach private RDS through VPC routing and security groups. Moving the app to private subnets would require NAT or VPC endpoints for ECR, CloudWatch Logs, and other AWS APIs.
+- One AWS-specific teardown gotcha is Secrets Manager name retention. If a secret is scheduled for deletion rather than force-deleted, the name remains reserved and Terraform cannot recreate it.  I set `recovery_window_in_days = 0` so future destroys remove it immediately, but if a prior delete scheduled recovery, we still have to manually restore and force-delete the secret before rebuilding, e.g.:
+  Delete:
+    aws secretsmanager delete-secret \
+	  --secret-id research-pipeline/database-url \
+	  --force-delete-without-recovery \
+	  --region us-east-2
+  Restore:
+    aws secretsmanager restore-secret \
+	  --secret-id research-pipeline/database-url \
+	  --region us-east-2
 
 ---
 
