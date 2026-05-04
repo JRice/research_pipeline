@@ -466,7 +466,7 @@ For anything beyond a short-lived exercise environment, remove `force_destroy = 
     aws secretsmanager restore-secret \
 	  --secret-id research-pipeline/database-url \
 	  --region us-east-2
-
+- One thing I'd improve is anomaly explainability. The current table stores the anomaly type and confidence score, but not the observed value or rolling baseline that produced it. The observed value can be added cheaply from the joined sensor reading, but the more complete fix is to persist the detector’s rolling mean and standard deviation alongside each anomaly, so downstream users can see not just that something was anomalous, but _why._
 ---
 
 ## Operational notes
