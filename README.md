@@ -467,26 +467,59 @@ For anything beyond a short-lived exercise environment, remove `force_destroy = 
 	  --secret-id research-pipeline/database-url \
 	  --region us-east-2
 - One thing I'd improve is anomaly explainability. The current table stores the anomaly type and confidence score, but not the observed value or rolling baseline that produced it. The observed value can be added cheaply from the joined sensor reading, but the more complete fix is to persist the detector’s rolling mean and standard deviation alongside each anomaly, so downstream users can see not just that something was anomalous, but _why._
+- Because I skipped an ALB for scope and cost, the public entry point is the task's public IP. That keeps infrastructure small, but the IP is **not stable**. A production version would put an ALB in front, attach Route 53/ACM, and use ECS service discovery or target groups instead of asking users to chase task IPs. As a result, you should be careful to **run scripts/aws_app_url.sh** before you make requests to the site.
+
 ---
 
-## Operational notes
-
-A typical local workflow is:
+## Typical Local Workflow
 
 ```bash
+source .venv/bin/activate
+pip install -r requirements.txt  # IF NEEDED
 python generate_data.py -n 5000 --anomaly-rate 0.05 --seed 42 -o data/sample_data.csv
-docker compose up --build
+docker compose up -d --build # YOU ONLY NEED THE BUILD if things have changed since you last ran it, ofc
 docker compose run --rm worker
+
+# Check app status:
+curl http://localhost:8080/api/health
+curl http://localhost:8080/api/sensors
+curl "http://localhost:8080/api/anomalies?page=1&page_size=5"
+curl "http://localhost:8080/api/anomalies?sensor_id=TEMP_001&page=1&page_size=10"
+# You can also bypass nginx and hit the API directly, e.g.:
+curl http://localhost:8000/health
+
+# Check container statuses:
+docker compose ps
+docker compose logs api
+docker compose logs nginx
+docker compose logs postgres
+
+# Prove idempotent rows:
+docker compose run --rm worker python ingest.py --reset
+docker compose run --rm worker # THIS SHOULD SAY 0 READINGS INSERTED.
 open http://localhost:8080
 ```
 
 A typical AWS workflow is:
 
 ```bash
-export TF_VAR_db_password='CHANGEME'
+# Enter your password for the database:
+read -sp "Enter MySQL Password: " TF_VAR_db_password
+export TF_VAR_db_password
+# If this is your first time:
 terraform -chdir=terraform init
+# Otherwise:
+terraform -chdir=terraform plan
 terraform -chdir=terraform apply
-# push to main to let GitHub Actions build/push/deploy images
+
+# Next, EITHER push to main to let GitHub Actions build/push/deploy images, OR, manually:
+scripts/push_images.sh
+scripts/aws_run_migration.sh
+
+# Then continue:
 python generate_data.py -n 10000 -o data/sample_data.csv --seed 42
+BUCKET="$(terraform -chdir=terraform output -raw data_bucket_name)"
+aws s3 cp data/sample_data.csv "s3://${BUCKET}/sample_data.csv" --region <region code> # REPLACE REGION AS NEEDED
 scripts/aws_run_worker.sh
+scripts/aws_app_url.sh # THIS WILL TELL YOU WHERE TO GO TO VISIT THE SITE
 ```
