@@ -162,24 +162,28 @@ resource "aws_ecr_repository" "api" {
   name                 = "${var.project_name}-api"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
+  force_delete = true
 }
 
 resource "aws_ecr_repository" "worker" {
   name                 = "${var.project_name}-worker"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
+  force_delete = true
 }
 
 resource "aws_ecr_repository" "migrate" {
   name                 = "${var.project_name}-migrate"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
+  force_delete = true
 }
 
 resource "aws_ecr_repository" "nginx" {
   name                 = "${var.project_name}-nginx"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
+  force_delete = true
 }
 
 resource "aws_s3_bucket" "data" {
